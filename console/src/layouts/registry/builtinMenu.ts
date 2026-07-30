@@ -48,6 +48,7 @@ import { Package } from "lucide-react";
 import i18next from "i18next";
 import { menuRegistry } from "../../plugins/registry/store";
 import type { MenuItem } from "../../plugins/registry/types";
+import { useAuthStore } from "../../stores/authStore";
 
 /** Translate a nav key. Falls back to defaultValue when i18n hasn't loaded. */
 const navLabel = (key: string, defaultValue?: string) => (): string =>
@@ -278,6 +279,17 @@ export const BUILTIN_MENU: MenuItem[] = [
     icon: Package,
     route: "core.plugin-manager",
     order: 110,
+  },
+  {
+    //用户管理菜单属于设置区域，但只对全局登录状态中的管理员显示。
+    id: "core.users",
+    location: "primary.settings",
+    parentId: "core.settings-group",
+    label: navLabel("nav.users", "用户管理"),
+    icon: SparkUserGroupLine,
+    route: "core.users",
+    order: 120,
+    visible: () => useAuthStore.getState().user?.role === "admin", //仅控制菜单显示，后端仍负责真正的管理员鉴权。
   },
 ];
 

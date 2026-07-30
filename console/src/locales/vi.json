@@ -79,7 +79,8 @@
     "debug": "Gỡ lỗi",
     "plugins": "Plugin",
     "backups": "Sao lưu",
-    "pluginManager": "Quản lý Plugin"
+    "pluginManager": "Quản lý Plugin",
+    "users": "Quản lý người dùng"
   },
   "header": {
     "changelog": "Nhật ký thay đổi",
@@ -1398,5 +1399,46 @@
   },
   "loop": {
     "gotoSettings": "Cài đặt Loop Agent"
+  },
+  "users": {
+    "title": "Quản lý người dùng",
+    "description": "Quản lý tài khoản, ảnh đại diện, tên và quyền QwenPaw.",
+    "total": "{{count}} người dùng",
+    "empty": "Chưa có người dùng",
+    "add": "Thêm người dùng",
+    "editTitle": "Chỉnh sửa người dùng",
+    "addTitle": "Thêm người dùng",
+    "userId": "ID người dùng",
+    "user": "Người dùng",
+    "avatar": "Ảnh đại diện",
+    "chooseAvatar": "Chọn ảnh đại diện",
+    "name": "Tên",
+    "nameRequired": "Vui lòng nhập tên",
+    "username": "Tên đăng nhập",
+    "usernameRequired": "Vui lòng nhập tên đăng nhập",
+    "password": "Mật khẩu",
+    "passwordRequired": "Vui lòng nhập mật khẩu ít nhất 8 ký tự",
+    "passwordOptional": "Để trống nếu không đổi",
+    "resetPassword": "Đặt lại mật khẩu",
+    "role": "Vai trò",
+    "admin": "Quản trị viên",
+    "normalUser": "Người dùng",
+    "status": "Trạng thái",
+    "active": "Đang hoạt động",
+    "disabled": "Đã tắt",
+    "createdAt": "Ngày tạo",
+    "enable": "Bật",
+    "disable": "Tắt",
+    "updateSuccess": "Đã cập nhật người dùng",
+    "createSuccess": "Đã tạo người dùng",
+    "saveFailed": "Lưu người dùng thất bại",
+    "loadFailed": "Tải người dùng thất bại",
+    "deleteTitle": "Xóa người dùng",
+    "deleteConfirm": "Xóa người dùng “{{name}}” phải không?",
+    "deleteSuccess": "Đã xóa người dùng",
+    "deleteFailed": "Xóa người dùng thất bại",
+    "statusUpdated": "Đã cập nhật trạng thái người dùng",
+    "forbiddenTitle": "Từ chối truy cập",
+    "forbiddenDescription": "Chỉ quản trị viên mới có thể quản lý người dùng."
   }
 }

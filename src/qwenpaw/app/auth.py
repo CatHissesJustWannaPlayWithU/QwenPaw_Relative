@@ -1,19 +1,16 @@
 # -*- coding: utf-8 -*-
-"""Authentication module: password hashing, JWT tokens, and FastAPI middleware.
+"""认证模块：密码哈希、JWT token 与 FastAPI 中间件。
 
-Login is disabled by default and only enabled when the environment
-variable ``QWENPAW_AUTH_ENABLED`` is set to a truthy value (``true``,
-``1``, ``yes``).  Credentials are created through a web-based
-registration flow rather than environment variables, so that agents
-running inside the process cannot read plaintext passwords.
+登录默认关闭，只有环境变量 ``QWENPAW_AUTH_ENABLED`` 为真值
+（``true``、``1``、``yes``）时才启用。账号通过网页注册流程创建，
+而不是从环境变量读取明文密码，避免进程中的 agent 读取密码。
 
-Single-user design: only one account can be registered.  If the user
-forgets their password, delete ``auth.json`` from ``SECRET_DIR`` and
-restart the service to re-register.
+认证数据支持多用户。旧版单用户 ``auth.json`` 第一次读取时会迁移为
+管理员账号。
 
-Uses only Python stdlib (hashlib, hmac, secrets) to avoid adding new
-dependencies.  The password is stored as a salted SHA-256 hash in
-``auth.json`` under ``SECRET_DIR``.
+只使用 Python 标准库（hashlib、hmac、secrets），不额外增加依赖。
+密码以带随机盐的 SHA-256 摘要形式保存到 ``SECRET_DIR`` 下的
+``auth.json``。
 """
 from __future__ import annotations
 
@@ -26,6 +23,7 @@ import os
 import re
 import secrets
 import time
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Request, Response
@@ -41,15 +39,20 @@ from ..security.secret_store import (
 
 logger = logging.getLogger(__name__)
 
-AUTH_FILE = SECRET_DIR / "auth.json"
+AUTH_FILE = SECRET_DIR / "auth.json" #文件路径
+#这是一个零依赖的设计决策，只用标准库。所以数据存储就是一个 JSON 文件。
+MAX_AVATAR_LENGTH = 2_000_000
+MIN_PASSWORD_LENGTH = 8
+USER_ROLES = frozenset({"admin", "user"}) #校验角色合法性
+USER_STATUSES = frozenset({"active", "disabled"}) #校验状态合法性
 
-# Token validity: 7 days (default)
+# token 默认有效期：7 天
 TOKEN_EXPIRY_SECONDS = 7 * 24 * 3600
 
-# Maximum token validity: 100 years (for "permanent" tokens)
+# token 最大有效期：100 年，用于“永久 token”
 TOKEN_EXPIRY_MAX = 100 * 365 * 24 * 3600
 
-# Paths that do NOT require authentication
+# 不需要认证的完整路径
 _PUBLIC_PATHS: frozenset[str] = frozenset(
     {
         "/api/auth/login",
@@ -62,10 +65,9 @@ _PUBLIC_PATHS: frozenset[str] = frozenset(
     },
 )
 
-# Prefixes that do NOT require authentication (static assets)
-# /api/frontend_plugin/ is safe: only read-only GET handlers are registered
-# under that prefix (list + static file serving).  All write operations
-# remain under /api/plugins/ which requires authentication.
+# 不需要认证的路径前缀，主要用于静态资源
+# /api/frontend_plugin/ 只注册只读 GET 接口，包含列表与静态文件读取。
+# 写操作仍在需要认证的 /api/plugins/ 下。
 _PUBLIC_PREFIXES: tuple[str, ...] = (
     "/assets/",
     "/logo.png",
@@ -75,24 +77,32 @@ _PUBLIC_PREFIXES: tuple[str, ...] = (
 
 
 # ---------------------------------------------------------------------------
-# Helpers (reuse SECRET_DIR patterns from envs/store.py)
+# 工具函数：复用 envs/store.py 中 SECRET_DIR 的处理方式
 # ---------------------------------------------------------------------------
 
-
+#"文件权限怎么控制？" → _chmod_best_effort + _prepare_secret_parent
+# auth.json 里存着密码哈希和 JWT 密钥。如果权限是 644（所有人可读）
+# 任何登录到服务器的用户都能 cat auth.json 拿到哈希去离线暴力破解。
+#目录设 0o700：只有文件 owner 能进入目录
+#文件设 0o600（在 _save_auth_data 里）：只有 owner 能读写
+#为什么叫 "best_effort"？ 因为在 Windows 上 os.chmod 基本无效，在 Docker 里可能以 root 运行。
+# 开发者选择"尽力设权限，设不了就算了"，而不是直接崩溃。
+# 这是一个可用性优先于安全性的权衡——程序不能因为权限设不上就启动失败。
+#设文件权限 0o600
 def _chmod_best_effort(path, mode: int) -> None:
     try:
         os.chmod(path, mode)
     except OSError:
         pass
 
-
+#创建目录+设权限
 def _prepare_secret_parent(path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     _chmod_best_effort(path.parent, 0o700)
 
 
 # ---------------------------------------------------------------------------
-# Password hashing (salted SHA-256, no external deps)
+# 密码哈希：带随机盐的 SHA-256，不依赖第三方库
 # ---------------------------------------------------------------------------
 
 
@@ -100,7 +110,7 @@ def _hash_password(
     password: str,
     salt: Optional[str] = None,
 ) -> tuple[str, str]:
-    """Hash *password* with *salt*.  Returns ``(hash_hex, salt_hex)``."""
+    """使用随机盐计算密码摘要，返回 ``(hash_hex, salt_hex)``。"""
     if salt is None:
         salt = secrets.token_hex(16)
     h = hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
@@ -108,18 +118,18 @@ def _hash_password(
 
 
 def verify_password(password: str, stored_hash: str, salt: str) -> bool:
-    """Verify *password* against a stored hash."""
+    """用保存的摘要和随机盐验证输入密码。"""
     h, _ = _hash_password(password, salt)
     return hmac.compare_digest(h, stored_hash)
 
 
 # ---------------------------------------------------------------------------
-# Token generation / verification (HMAC-SHA256, no PyJWT needed)
+# token 创建与验证：使用 HMAC-SHA256，不需要 PyJWT
 # ---------------------------------------------------------------------------
 
 
 def _get_jwt_secret() -> str:
-    """Return the signing secret, creating one if absent."""
+    """获取 JWT 签名密钥；不存在时创建并保存。"""
     data = _load_auth_data()
     secret = data.get("jwt_secret", "")
     if not secret:
@@ -130,34 +140,31 @@ def _get_jwt_secret() -> str:
 
 
 def create_token(username: str, expiry_seconds: Optional[int] = None) -> str:
-    """Create an HMAC-signed token: ``base64(payload).signature``.
+    """创建 HMAC 签名的 token，格式为 ``base64(payload).signature``。
 
-    Args:
-        username: The username to encode in the token.
-        expiry_seconds: Custom expiry time in seconds.
-            Use -1 or 0 for permanent tokens.
-            Defaults to TOKEN_EXPIRY_SECONDS (7 days).
+    ``username`` 会写入 token。``expiry_seconds`` 是自定义有效期秒数；
+    传入 -1 或 0 表示永久 token，未传时默认 7 天。
     """
     import base64
 
     if expiry_seconds is None:
         expiry_seconds = TOKEN_EXPIRY_SECONDS
     elif expiry_seconds <= 0:
-        # Permanent token: 100 years
+        # 永久 token 实际按 100 年计算，避免无过期时间的特殊分支
         expiry_seconds = TOKEN_EXPIRY_MAX
     else:
-        # Cap at maximum allowed expiry
+        # 自定义有效期不能超过上限
         expiry_seconds = min(expiry_seconds, TOKEN_EXPIRY_MAX)
 
     secret = _get_jwt_secret()
-    # Generate unique token ID (jti) for revocation support
+    # 每个 token 都有独立 jti，退出登录时可只撤销这一张 token
     token_id = secrets.token_hex(16)
     payload = json.dumps(
         {
             "sub": username,
             "exp": int(time.time()) + expiry_seconds,
             "iat": int(time.time()),
-            "jti": token_id,  # JWT ID for individual revocation
+            "jti": token_id,  # 用于单个 token 撤销的唯一编号
         },
     )
     payload_b64 = base64.urlsafe_b64encode(payload.encode()).decode()
@@ -170,9 +177,9 @@ def create_token(username: str, expiry_seconds: Optional[int] = None) -> str:
 
 
 def verify_token(token: str) -> Optional[str]:
-    """Verify *token*, return username if valid, ``None`` otherwise.
+    """验证 token；有效时返回用户名，无效时返回 ``None``。
 
-    Also checks if the token has been revoked (appears in the revocation list).
+    同时检查 token 是否已进入撤销列表。
     """
     import base64
 
@@ -193,7 +200,7 @@ def verify_token(token: str) -> Optional[str]:
         if payload.get("exp", 0) < time.time():
             return None
 
-        # Check if token is revoked
+        # 签名和有效期通过后，还要检查这张 token 是否已经被退出登录撤销
         jti = payload.get("jti")
         if jti and _is_token_revoked(jti):
             return None
@@ -205,21 +212,19 @@ def verify_token(token: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
-# Auth data persistence (auth.json in SECRET_DIR)
+# 认证数据读写：auth.json 保存在 SECRET_DIR 下
 # ---------------------------------------------------------------------------
 
-
+#是_ensure_user_schema的唯一调用者
 def _load_auth_data() -> dict:
-    """Load ``auth.json`` from ``SECRET_DIR``.
+    """从 ``SECRET_DIR`` 读取 ``auth.json``。
 
-    Returns the parsed dict, or a sentinel with ``_auth_load_error``
-    set to ``True`` when the file exists but cannot be read/parsed so
-    that callers can fail closed instead of silently bypassing auth.
+    文件存在但无法读取或解析时，返回带 ``_auth_load_error`` 的标记，
+    让调用方拒绝认证请求，而不是悄悄绕过认证。
 
-    Encrypted fields (``jwt_secret``) are transparently decrypted.
-    Legacy plaintext values trigger an automatic re-encryption.
+    ``jwt_secret`` 等敏感字段会自动解密；旧的明文值会触发重新加密。
     """
-    if AUTH_FILE.is_file():
+    if AUTH_FILE.is_file(): #文件存在时才读取
         try:
             with open(AUTH_FILE, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
@@ -227,13 +232,21 @@ def _load_auth_data() -> dict:
             needs_rewrite = any(
                 isinstance(data.get(field), str)
                 and data.get(field)
-                and not is_encrypted(data[field])
+                and not is_encrypted(data[field]) #判断是否需要重新加密
                 for field in AUTH_SECRET_FIELDS
             )
-            data = decrypt_dict_fields(data, AUTH_SECRET_FIELDS)
+            data = decrypt_dict_fields(data, AUTH_SECRET_FIELDS) #解密敏感字段
+            if _ensure_user_schema(data):
+                try:
+                    _save_auth_data(data) #迁移后回写
+                except Exception as migration_err:
+                    logger.debug(
+                        "Deferred auth user schema migration: %s",
+                        migration_err,
+                    )
             if needs_rewrite:
                 try:
-                    _save_auth_data(data)
+                    _save_auth_data(data) #迁移后回写
                 except Exception as enc_err:
                     logger.debug(
                         "Deferred plaintext→encrypted migration for"
@@ -248,9 +261,9 @@ def _load_auth_data() -> dict:
 
 
 def _save_auth_data(data: dict) -> None:
-    """Save ``auth.json`` to ``SECRET_DIR`` with restrictive permissions.
+    """以严格权限把认证数据保存到 ``SECRET_DIR`` 下的 ``auth.json``。
 
-    Sensitive fields (``jwt_secret``) are encrypted before writing.
+    写入前会加密 ``jwt_secret`` 等敏感字段。
     """
     _prepare_secret_parent(AUTH_FILE)
     encrypted_data = encrypt_dict_fields(data, AUTH_SECRET_FIELDS)
@@ -258,16 +271,188 @@ def _save_auth_data(data: dict) -> None:
         json.dump(encrypted_data, f, indent=2, ensure_ascii=False)
     _chmod_best_effort(AUTH_FILE, 0o600)
 
+#生成时间戳
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+#生成用户ID
+def _new_user_id() -> str:
+    return f"user_{secrets.token_hex(8)}"
+
+#这个函数负责把旧版单用户数据转换为新版多用户数据
+def _ensure_user_schema(data: dict) -> bool:
+    """把旧版认证数据迁移为多用户结构，并补齐用户默认字段。"""
+    changed = False
+    raw_users = data.get("users")
+    users: list[dict] = []
+
+    if isinstance(raw_users, dict):
+        for user_id, user in raw_users.items():
+            if isinstance(user, dict):
+                users.append({"id": str(user.get("id") or user_id), **user})
+        changed = True
+    elif isinstance(raw_users, list):
+        users = [user for user in raw_users if isinstance(user, dict)]
+    else: #如果既不是字典也不是列表，
+          #就去原来的老数据（data）里找找看有没有一个叫 user 的字段（这是旧版本的存储方式，以前只支持单用户）。
+        legacy = data.get("user")
+        if isinstance(legacy, dict) and legacy.get("username"):
+            users = [
+                {
+                    "id": "admin",
+                    "username": legacy.get("username", ""),
+                    "name": legacy.get("name") #用于显示右上角的姓名
+                    or legacy.get("username", ""),
+                    "avatar": legacy.get("avatar", ""), #用于右上角显示的头像数据
+                    "role": "admin",
+                    "status": "active",
+                    "created_at": legacy.get("created_at") or _now_iso(),
+                    "last_login": legacy.get("last_login", ""),
+                    "password_hash": legacy.get("password_hash", ""),
+                    "password_salt": legacy.get("password_salt", ""),
+                },
+            ]
+            changed = True
+
+    normalized: list[dict] = []
+    for user in users:
+        record = dict(user)
+        record.setdefault("id", _new_user_id())
+        record.setdefault("name", record.get("username", ""))
+        record.setdefault("avatar", "")
+        record.setdefault("role", "user")
+        record.setdefault("status", "active")
+        record.setdefault("created_at", _now_iso())
+        record.setdefault("last_login", "")
+        if record["role"] not in USER_ROLES:
+            record["role"] = "user"
+        if record["status"] not in USER_STATUSES:
+            record["status"] = "active"
+        normalized.append(record)
+        if record != user:
+            changed = True
+
+    if normalized != raw_users:
+        data["users"] = normalized
+        changed = True
+
+    # 保留旧版单用户字段，兼容命令行重置密码和旧安装目录。
+    primary = next(
+        (user for user in normalized if user.get("role") == "admin"),
+        normalized[0] if normalized else None,
+    )
+    if primary:
+        legacy = {
+            key: primary.get(key, "")
+            for key in (
+                "username",
+                "password_hash",
+                "password_salt",
+                "name",
+                "avatar",
+                "created_at",
+                "last_login",
+            )
+        }
+        if data.get("user") != legacy:
+            data["user"] = legacy
+            changed = True
+    elif "user" in data:
+        data.pop("user", None)
+        changed = True
+
+    return changed
+
+
+def _users(data: dict) -> list[dict]:
+    # 每次取用户列表前先迁移旧数据，保证下面的代码始终处理 users 列表。
+    _ensure_user_schema(data)
+    return data.setdefault("users", [])
+
+
+def _find_user(
+    data: dict,
+    *,
+    user_id: str | None = None,
+    username: str | None = None,
+) -> dict | None:
+    # 用户名比较忽略大小写，避免 Alice 和 alice 被当成两个账号。
+    normalized_username = username.casefold() if username else None
+    for user in _users(data):
+        if user_id is not None and user.get("id") == user_id:
+            return user
+        if (
+            normalized_username is not None
+            and str(user.get("username", "")).casefold() == normalized_username
+        ):
+            return user
+    return None
+
+
+def public_user(user: dict) -> dict:
+    """返回可给接口使用的用户资料，不包含密码摘要和随机盐。"""
+    return {
+        "id": user.get("id", ""),
+        "username": user.get("username", ""),
+        "name": user.get("name") or user.get("username", ""),
+        "avatar": user.get("avatar", ""),
+        "role": user.get("role", "user"),
+        "status": user.get("status", "active"),
+        "created_at": user.get("created_at", ""),
+        "last_login": user.get("last_login", ""),
+    }
+
+
+def get_user_by_username(username: str) -> dict | None:
+    return _find_user(_load_auth_data(), username=username)
+
+
+def get_user_by_id(user_id: str) -> dict | None:
+    return _find_user(_load_auth_data(), user_id=user_id)
+
+
+def list_public_users() -> list[dict]: #被list_users()调用，它返回所有用户的安全资料，不会返回密码摘要。
+    return [public_user(user) for user in _users(_load_auth_data())]
+
+
+def is_admin_user(username: str) -> bool:
+    # 管理员必须同时满足“账号启用”和“角色为 admin”。
+    user = get_user_by_username(username)
+    return bool(user and user.get("status") == "active" and user.get("role") == "admin")
+
+
+def _sync_legacy_user(data: dict, users: list[dict]) -> None:
+    # 把优先管理员同步回旧 user 字段，供旧命令行功能继续使用。
+    primary = next(
+        (user for user in users if user.get("role") == "admin"),
+        users[0] if users else None,
+    )
+    if primary:
+        data["user"] = {
+            key: primary.get(key, "")
+            for key in (
+                "username",
+                "password_hash",
+                "password_salt",
+                "name",
+                "avatar",
+                "created_at",
+                "last_login",
+            )
+        }
+    else:
+        data.pop("user", None)
+
 
 # ---------------------------------------------------------------------------
-# Token revocation (blacklist management)
+# token 撤销：管理已撤销 token 的黑名单
 # ---------------------------------------------------------------------------
 
 
 def _is_token_revoked(jti: str) -> bool:
-    """Check if a token ID (jti) is in the revocation list.
+    """检查 token 的 jti 是否在撤销列表中。
 
-    Uses O(1) dict lookup via revoked_tokens_meta for performance.
+    使用 revoked_tokens_meta 字典进行 O(1) 查询。
     """
     data = _load_auth_data()
     meta = data.get("revoked_tokens_meta", {})
@@ -275,24 +460,24 @@ def _is_token_revoked(jti: str) -> bool:
 
 
 def _add_to_revocation_list(jti: str, exp: int) -> None:
-    """Add a token ID to the revocation list with its expiry time.
+    """把 token 的 jti 与过期时间加入撤销列表。
 
-    Uses revoked_tokens_meta dict for O(1) lookups. The revoked_tokens list
-    is kept for backwards compatibility but not used for membership checks.
+    revoked_tokens_meta 字典用于 O(1) 查询；revoked_tokens 列表只为兼容旧数据，
+    不再用于判断成员是否存在。
     """
     data = _load_auth_data()
     if data.get("_auth_load_error"):
         return
 
-    # Initialize revoked_tokens_meta if not present
+    # 旧认证文件中可能没有该字段，第一次撤销时再创建。
     if "revoked_tokens_meta" not in data:
         data["revoked_tokens_meta"] = {}
 
-    # O(1) check using dict
+    # 用字典判断 jti 是否存在，查询复杂度为 O(1)。
     if jti not in data["revoked_tokens_meta"]:
         data["revoked_tokens_meta"][jti] = exp
 
-        # Also add to list for backwards compatibility
+        # 同时写入旧列表，兼容依赖该字段的旧版本。
         if "revoked_tokens" not in data:
             data["revoked_tokens"] = []
         data["revoked_tokens"].append(jti)
@@ -301,9 +486,7 @@ def _add_to_revocation_list(jti: str, exp: int) -> None:
 
 
 def _clean_expired_revocations() -> None:
-    """
-    Remove expired tokens from the revocation list to prevent unbounded growth.
-    """
+    """清理已过期的撤销记录，避免撤销列表持续增长。"""
     data = _load_auth_data()
     if data.get("_auth_load_error"):
         return
@@ -312,7 +495,7 @@ def _clean_expired_revocations() -> None:
     meta = data.get("revoked_tokens_meta", {})
     current_time = int(time.time())
 
-    # Remove expired tokens
+    # 只保留仍在有效期内的撤销记录。
     cleaned_revoked = []
     cleaned_meta = {}
 
@@ -333,25 +516,22 @@ def _clean_expired_revocations() -> None:
 
 
 def is_auth_enabled() -> bool:
-    """Check whether authentication is enabled via environment variable.
+    """根据环境变量判断是否启用认证。
 
-    Returns ``True`` when ``QWENPAW_AUTH_ENABLED`` is set to a truthy
-    value (``true``, ``1``, ``yes``).  The presence of a registered
-    user is checked separately by the middleware so that the first
-    user can still reach the registration page.
+    ``QWENPAW_AUTH_ENABLED`` 为 ``true``、``1``、``yes`` 时返回 ``True``。
+    是否已有用户由中间件单独检查，保证第一个用户仍能访问注册接口。
     """
     env_flag = EnvVarLoader.get_str("QWENPAW_AUTH_ENABLED", "").strip().lower()
     return env_flag in ("true", "1", "yes")
 
 
 def has_registered_users() -> bool:
-    """Return ``True`` if a user has been registered."""
-    data = _load_auth_data()
-    return bool(data.get("user"))
+    """判断系统中是否至少已有一个用户。"""
+    return bool(_users(_load_auth_data()))
 
 
 # ---------------------------------------------------------------------------
-# Registration (single-user)
+# 注册
 # ---------------------------------------------------------------------------
 
 
@@ -359,51 +539,65 @@ def register_user(
     username: str,
     password: str,
     expiry_seconds: Optional[int] = None,
+    *,
+    name: str | None = None,
+    avatar: str = "",
+    role: str | None = None,
 ) -> Optional[str]:
-    """Register the single user account.
-
-    Args:
-        username: The username to register.
-        password: The password to register.
-        expiry_seconds: Custom token expiry time in seconds.
-
-    Returns a token on success, ``None`` if a user already exists.
-    """
+    """注册账号；成功时返回 token，用户名已存在时返回 ``None``。"""
     data = _load_auth_data()
+    users = _users(data)
 
-    # Only one user allowed
-    if data.get("user"):
+    #检查用户名是否重复，检查密码至少 8 位，检查头像长度
+    username = username.strip()
+    password = password.strip()
+    if not username or not password or len(password) < MIN_PASSWORD_LENGTH:
+        return None
+    if _find_user(data, username=username):
+        return None
+    if len(avatar) > MAX_AVATAR_LENGTH:
         return None
 
-    pw_hash, salt = _hash_password(password)
-    data["user"] = {
-        "username": username,
-        "password_hash": pw_hash,
-        "password_salt": salt,
-    }
+    assigned_role = (
+        role if role in USER_ROLES else ("admin" if not users else "user")
+        #如果系统里还没有用户 → 当前注册者是 admin；如果已经有用户 → 当前注册者是 user
+    )
 
-    # Ensure jwt_secret exists
+    #密码生成 hash 和 salt
+    pw_hash, salt = _hash_password(password)
+    #创建用户对象
+    user = {
+        "id": _new_user_id() if users else "admin",
+        "username": username, 
+        "name": (name or username).strip(), #用于右上角显示的姓名
+        "avatar": avatar, #用于右上角显示的头像数据
+        "role": assigned_role, #管理员or用户
+        "status": "active", #active 或 disabled，决定是否允许登录和访问
+        "created_at": _now_iso(), #现在的时间戳
+        "last_login": "",
+        "password_hash": pw_hash, #密码摘要，不是明文密码
+        "password_salt": salt, #参与密码摘要计算的随机盐值
+    }
+    users.append(user)
+
+    # 所有 token 都用 jwt_secret 签名；首次注册时必须先创建它。
     if not data.get("jwt_secret"):
         data["jwt_secret"] = secrets.token_hex(32)
 
+    _sync_legacy_user(data, users)
     _save_auth_data(data)
     logger.info("User '%s' registered", username)
     return create_token(username, expiry_seconds)
 
 
 def auto_register_from_env() -> None:
-    """Auto-register admin user from environment variables.
+    """根据环境变量自动注册管理员。
 
-    Called once during application startup.  If ``QWENPAW_AUTH_ENABLED``
-    is truthy and both ``QWENPAW_AUTH_USERNAME`` and ``QWENPAW_AUTH_PASSWORD``
-    are set, the admin account is created automatically — useful for
-    Docker, Kubernetes, server-panel, and other automated deployments
-    where interactive web registration is not practical.
+    应用启动时调用一次。认证已启用且同时设置
+    ``QWENPAW_AUTH_USERNAME``、``QWENPAW_AUTH_PASSWORD`` 时自动创建管理员。
+    Docker、Kubernetes、服务器面板等无法交互式网页注册的部署场景会用到它。
 
-    Skips silently when:
-    - authentication is not enabled
-    - a user has already been registered
-    - either env var is missing or empty
+    认证未开启、已有用户、环境变量缺失或为空时直接跳过。
     """
     if not is_auth_enabled():
         return
@@ -422,27 +616,30 @@ def auto_register_from_env() -> None:
             username,
         )
 
-
+#被修改个人资料接口调用
 def update_credentials(
     current_password: str,
     new_username: Optional[str] = None,
     new_password: Optional[str] = None,
     expiry_seconds: Optional[int] = None,
+    *,
+    username: str | None = None,
+    name: str | None = None,
+    avatar: str | None = None,
 ) -> Optional[str]:
-    """Update the registered user's username and/or password.
+    """修改当前用户自己的资料，并返回新的 token。
 
-    Requires the current password for verification.  Returns a new
-    token on success (because the username may have changed), or
-    ``None`` if verification fails.
-
-    Args:
-        current_password: The current password for verification.
-        new_username: The new username (optional).
-        new_password: The new password (optional).
-        expiry_seconds: Custom token expiry time in seconds.
+    修改前必须验证 current_password。成功后重新签发 token，因为用户名可能已变化；
+    密码验证失败时返回 ``None``。
     """
     data = _load_auth_data()
-    user = data.get("user")
+    users = _users(data)
+    user = _find_user(data, username=username) if username else None
+    if user is None and users:
+        user = next(
+            (item for item in users if item.get("role") == "admin"),
+            users[0],
+        )
     if not user:
         return None
 
@@ -452,23 +649,36 @@ def update_credentials(
         return None
 
     if new_username and new_username.strip():
-        user["username"] = new_username.strip()
+        candidate = new_username.strip()
+        duplicate = _find_user(data, username=candidate)
+        if duplicate and duplicate.get("id") != user.get("id"):
+            return None
+        user["username"] = candidate
 
     if new_password:
+        if len(new_password.strip()) < MIN_PASSWORD_LENGTH:
+            return None
         pw_hash, salt = _hash_password(new_password)
         user["password_hash"] = pw_hash
         user["password_salt"] = salt
-        # Rotate JWT secret to invalidate all existing sessions
+        # 修改密码后轮换签名密钥，使旧 token 全部失效。
         data["jwt_secret"] = secrets.token_hex(32)
 
-    data["user"] = user
+    if name is not None:
+        user["name"] = name.strip() or user.get("username", "")
+    if avatar is not None:
+        if len(avatar) > MAX_AVATAR_LENGTH:
+            return None
+        user["avatar"] = avatar
+
+    _sync_legacy_user(data, users)
     _save_auth_data(data)
     logger.info("Credentials updated for user '%s'", user["username"])
     return create_token(user["username"], expiry_seconds)
 
 
 # ---------------------------------------------------------------------------
-# Authentication
+# 登录认证
 # ---------------------------------------------------------------------------
 
 
@@ -477,18 +687,12 @@ def authenticate(
     password: str,
     expiry_seconds: Optional[int] = None,
 ) -> Optional[str]:
-    """Authenticate *username* / *password*.  Returns a token if valid.
-
-    Args:
-        username: The username to authenticate.
-        password: The password to verify.
-        expiry_seconds: Custom token expiry time in seconds.
-    """
+    """验证用户名与密码；成功时返回 token。"""
     data = _load_auth_data()
-    user = data.get("user")
+    user = _find_user(data, username=username)
     if not user:
         return None
-    if user.get("username") != username:
+    if user.get("status") != "active": #禁用账号不能登录
         return None
     stored_hash = user.get("password_hash", "")
     stored_salt = user.get("password_salt", "")
@@ -497,22 +701,135 @@ def authenticate(
         and stored_salt
         and verify_password(password, stored_hash, stored_salt)
     ):
+        user["last_login"] = _now_iso()
+        _sync_legacy_user(data, _users(data))
+        _save_auth_data(data)
         return create_token(username, expiry_seconds)
     return None
 
+#被create_user()调用
+def create_managed_user(
+    *,
+    username: str,
+    password: str,
+    name: str,
+    avatar: str = "",
+    role: str = "user",
+    status: str = "active",
+) -> dict:
+    """按管理员提交的数据创建用户，并返回安全用户资料。"""
+    data = _load_auth_data()
+    users = _users(data)
+    username = username.strip()
+    password = password.strip()
+    if not username or not password or len(password) < MIN_PASSWORD_LENGTH:
+        raise ValueError("Username and password are required")
+    if role not in USER_ROLES:
+        raise ValueError("Invalid user role")
+    if status not in USER_STATUSES:
+        raise ValueError("Invalid user status")
+    if len(avatar) > MAX_AVATAR_LENGTH:
+        raise ValueError("Avatar is too large")
+    if _find_user(data, username=username):
+        raise ValueError("Username already exists")
 
+    # 管理员设置的初始密码同样只保存摘要和随机盐。
+    pw_hash, salt = _hash_password(password)
+    user = {
+        "id": _new_user_id(),
+        "username": username,
+        "name": name.strip() or username,
+        "avatar": avatar,
+        "role": role,
+        "status": status,
+        "created_at": _now_iso(),
+        "last_login": "",
+        "password_hash": pw_hash,
+        "password_salt": salt,
+    }
+    users.append(user)
+    _sync_legacy_user(data, users)
+    _save_auth_data(data)
+    return public_user(user)
+
+#被update_user()调用
+def update_managed_user(user_id: str, updates: dict) -> dict | None:
+    """执行管理员修改，并返回修改后的安全用户资料。"""
+    data = _load_auth_data()
+    users = _users(data)
+    user = _find_user(data, user_id=user_id)
+    if not user:
+        return None
+
+    next_username = updates.get("username")
+    if next_username is not None:
+        next_username = next_username.strip()
+        if not next_username:
+            raise ValueError("Username cannot be empty")
+        duplicate = _find_user(data, username=next_username)
+        if duplicate and duplicate.get("id") != user_id:
+            raise ValueError("Username already exists")
+        user["username"] = next_username
+
+    for key in ("name", "avatar", "role", "status"):
+        if key not in updates or updates[key] is None:
+            continue
+        value = updates[key]
+        if key == "role" and value not in USER_ROLES:
+            raise ValueError("Invalid user role")
+        if key == "status" and value not in USER_STATUSES:
+            raise ValueError("Invalid user status")
+        if key == "avatar" and len(value) > MAX_AVATAR_LENGTH:
+            raise ValueError("Avatar is too large")
+        if key == "name" and isinstance(value, str):
+            user[key] = value.strip() or user.get("username", "")
+        else:
+            user[key] = value.strip() if isinstance(value, str) else value
+
+    password = updates.get("password")
+    if password:
+        if len(password.strip()) < MIN_PASSWORD_LENGTH:
+            raise ValueError("Password must be at least 8 characters")
+        pw_hash, salt = _hash_password(password)
+        user["password_hash"] = pw_hash
+        user["password_salt"] = salt
+        # 管理员重置密码后，旧 token 全部失效，避免旧会话继续使用。
+        data["jwt_secret"] = secrets.token_hex(32)
+
+    _sync_legacy_user(data, users)
+    _save_auth_data(data)
+    return public_user(user)
+
+#被delete_user()调用
+def delete_managed_user(user_id: str, current_username: str) -> bool:
+    """删除用户，但不能删除当前用户或最后一个管理员。"""
+    data = _load_auth_data()
+    users = _users(data)
+    user = _find_user(data, user_id=user_id)
+    if not user:
+        return False
+    if user.get("username") == current_username: #当前管理员不能删除自己
+        raise ValueError("Cannot delete the current user")
+    if user.get("role") == "admin": #删除管理员前必须确认系统还会保留其他管理员
+        admin_count = sum(item.get("role") == "admin" for item in users)
+        if admin_count <= 1:
+            raise ValueError("Cannot delete the last administrator")
+    users.remove(user)
+    _sync_legacy_user(data, users)
+    _save_auth_data(data)
+    return True
+
+#token 内部有唯一编号 jti。退出登录时，后端把这个 jti 放进已撤销列表。
+#之后再有人拿这个 token 请求接口：验证签名通过 -> 检查 jti 是否在撤销列表 -> 在 → token 无效，返回 401
 def revoke_token(token: str) -> bool:
-    """Revoke a single token by adding its jti to the blacklist.
+    """把单个 token 的 jti 加入黑名单，实现退出登录。
 
-    Args:
-        token: The token string to revoke.
-
-    Returns True on success, False on failure.
+    成功返回 ``True``，失败返回 ``False``。
     """
     import base64
 
     try:
-        # Extract jti and exp from token
+        # 从 token 中取出唯一编号和过期时间，撤销记录只需保留到过期为止。
         parts = token.split(".", 1)
         if len(parts) != 2:
             return False
@@ -529,7 +846,7 @@ def revoke_token(token: str) -> bool:
         _add_to_revocation_list(jti, exp)
         logger.info("Token %s revoked", jti[:8])
 
-        # Clean up expired tokens periodically
+        # 每次撤销时顺便清理已过期的撤销记录。
         _clean_expired_revocations()
 
         return True
@@ -539,21 +856,20 @@ def revoke_token(token: str) -> bool:
 
 
 def revoke_all_tokens() -> bool:
-    """Revoke all existing tokens by rotating the JWT secret.
+    """通过轮换 JWT 签名密钥撤销所有 token。
 
-    This will invalidate all tokens that were issued before this call.
-    Also clears the revocation list since all tokens are invalid anyway.
-    Returns True on success, False on failure.
+    调用前签发的 token 会全部失效，同时清空不再需要的撤销列表。
+    成功返回 ``True``，失败返回 ``False``。
     """
     try:
         data = _load_auth_data()
         if data.get("_auth_load_error"):
             return False
 
-        # Rotate JWT secret to invalidate all existing tokens
+        # 旧 token 的签名密钥不再匹配，因此会全部失效。
         data["jwt_secret"] = secrets.token_hex(32)
 
-        # Clear revocation list since all tokens are now invalid
+        # 所有旧 token 已失效，无需再保留单独撤销记录。
         data["revoked_tokens"] = []
         data["revoked_tokens_meta"] = {}
 
@@ -566,7 +882,7 @@ def revoke_all_tokens() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# FastAPI middleware — client IP resolution with trusted proxy verification
+# FastAPI 中间件：解析客户端 IP，并验证可信代理
 # ---------------------------------------------------------------------------
 
 _LOOPBACK = frozenset({"127.0.0.1", "::1"})
@@ -578,7 +894,7 @@ _warned_untrusted_ips: set[str] = set()
 
 
 def _normalize_ip(raw: str) -> str | None:
-    """Strip brackets, port, zone-id and validate. None on failure."""
+    """移除括号、端口、zone-id 后验证 IP；失败时返回 ``None``。"""
     if not raw:
         return None
     s = raw.strip()
@@ -594,7 +910,7 @@ def _normalize_ip(raw: str) -> str | None:
 
 
 def _parse_networks(entries: list[str]) -> list:
-    """Parse CIDR/IP strings into network objects."""
+    """把 CIDR/IP 字符串解析为网络对象。"""
     nets = []
     for entry in entries:
         try:
@@ -605,7 +921,7 @@ def _parse_networks(entries: list[str]) -> list:
 
 
 def _ip_in_networks(ip_str: str, networks: list) -> bool:
-    """Check if a normalized IP string falls within any network."""
+    """检查规范化后的 IP 是否属于任一网络。"""
     try:
         addr = ipaddress.ip_address(ip_str)
     except ValueError:
@@ -616,12 +932,12 @@ def _ip_in_networks(ip_str: str, networks: list) -> bool:
     return False
 
 
-# Cached config for hot-path auth checks (avoids disk read per request)
+# 缓存认证高频路径需要的配置，避免每个请求都读取磁盘
 _auth_config_cache: tuple = (0, None, [])
 
 
 def _get_config_cached():
-    """Return (config, trusted_networks) with mtime-based cache."""
+    """使用文件修改时间缓存，返回 ``(config, trusted_networks)``。"""
     global _auth_config_cache  # noqa: PLW0603
     from ..config import load_config
     from ..config.utils import get_config_path
@@ -639,18 +955,17 @@ def _get_config_cached():
 
 
 def _resolve_client_ip(request: Request) -> str:
-    """Return the real client IP.
+    """返回真实客户端 IP。
 
-    Only trusts proxy headers when the direct TCP peer is in
-    trusted_proxies. XFF is parsed right-to-left, skipping
-    trusted IPs.
+    只有直连节点属于配置的可信代理网络时，才信任 X-Forwarded-For；
+    XFF 从右向左解析并跳过可信代理 IP。
     """
     direct_raw = request.client.host if request.client else ""
     direct_ip = _normalize_ip(direct_raw) or direct_raw
 
     _cfg, networks = _get_config_cached()
     if not networks or not _ip_in_networks(direct_ip, networks):
-        # Log once per untrusted source to avoid flooding
+        # 每个不可信来源只记录一次，避免日志被大量请求淹没。
         has_proxy_hdr = request.headers.get(
             "x-forwarded-for",
         ) or request.headers.get("x-real-ip")
@@ -687,7 +1002,7 @@ resolve_client_ip = _resolve_client_ip
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    """Middleware that checks Bearer token on protected routes."""
+    """为受保护路由检查 Bearer token 的中间件。"""
 
     async def dispatch(self, request: Request, call_next):
         if self._should_skip_auth(request):
@@ -705,6 +1020,17 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if user is None:
             return Response(
                 content='{"detail":"Invalid or expired token"}',
+                status_code=401,
+                media_type="application/json",
+            )
+
+        # token 的有效期可能长于账号状态变化，所以每次都重新读取账号状态。
+        # 这样管理员禁用账号后，旧 token 也会立刻失效。
+        #token 本身有效，不代表用户一定还能使用系统
+        user_record = get_user_by_username(user) 
+        if not user_record or user_record.get("status") != "active":
+            return Response(
+                content='{"detail":"Account is disabled or unavailable"}',
                 status_code=401,
                 media_type="application/json",
             )
@@ -735,8 +1061,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if norm not in allowed:
             return False
 
-        # Defense-in-depth: loopback whitelist requires
-        # direct TCP peer also be loopback.
+        # 多一层保护：回环地址白名单还要求直连 TCP 节点也是回环地址。
         if norm in _LOOPBACK:
             peer = _normalize_ip(
                 request.client.host if request.client else "",
@@ -763,7 +1088,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 
 def check_proxy_config_sanity() -> None:
-    """Log a warning at startup if proxy config looks suspect."""
+    """启动时检查代理配置是否可疑，必要时写入警告日志。"""
     try:
         cfg, _ = _get_config_cached()
     except (OSError, ValueError):

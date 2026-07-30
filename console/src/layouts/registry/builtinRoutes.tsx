@@ -54,6 +54,8 @@ const BackupsPage = lazyImportWithRetry("../../pages/Settings/Backups");
 const PluginManagerPage = lazyImportWithRetry(
   "../../pages/Settings/PluginManager",
 );
+//用户管理页按需加载，只有访问 /users 时才下载该页面代码。
+const UsersPage = lazyImportWithRetry("../../pages/Settings/Users");
 
 /**
  * "/" lands here. Waits for useSyncCodingMode to populate the store before
@@ -121,6 +123,8 @@ export const BUILTIN_ROUTES: Route[] = [
     path: "/plugin-manager",
     component: PluginManagerPage,
   },
+  //将浏览器地址 /users 映射到管理员用户管理页面。
+  { id: "core.users", path: "/users", component: UsersPage },
 ];
 
 routeRegistry.addBuiltin(BUILTIN_ROUTES);

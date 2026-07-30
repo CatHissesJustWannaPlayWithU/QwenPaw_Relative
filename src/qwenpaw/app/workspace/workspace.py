@@ -57,8 +57,8 @@ class Workspace:
             agent_id: Unique agent identifier
             workspace_dir: Path to agent's workspace directory
         """
-        self.agent_id = agent_id
-        self.workspace_dir = Path(workspace_dir).expanduser()
+        self.agent_id = agent_id #唯一的代理标识符
+        self.workspace_dir = Path(workspace_dir).expanduser() #workspace_dir：代理工作区目录的路径
         self.workspace_dir.mkdir(parents=True, exist_ok=True)
 
         # Per-workspace pluggable registries (tools, hooks, commands, prompts)

@@ -77,7 +77,8 @@
     "debug": "Depuracao",
     "plugins": "Plugins",
     "backups": "Backups",
-    "pluginManager": "Gerenciador de Plugins"
+    "pluginManager": "Gerenciador de Plugins",
+    "users": "Gerenciamento de usuários"
   },
   "debug": {
     "title": "Depuracao",
@@ -2878,5 +2879,46 @@
   },
   "loop": {
     "gotoSettings": "Configurações de Loop do Agente"
+  },
+  "users": {
+    "title": "Gerenciamento de Usuários",
+    "description": "Gerencie contas, avatares, nomes e permissões do QwenPaw.",
+    "total": "{{count}} usuários",
+    "empty": "Nenhum usuário ainda",
+    "add": "Adicionar usuário",
+    "editTitle": "Editar usuário",
+    "addTitle": "Adicionar usuário",
+    "userId": "ID do usuário",
+    "user": "Usuário",
+    "avatar": "Avatar",
+    "chooseAvatar": "Escolher avatar",
+    "name": "Nome",
+    "nameRequired": "Digite um nome",
+    "username": "Nome de usuário",
+    "usernameRequired": "Digite um nome de usuário",
+    "password": "Senha",
+    "passwordRequired": "Digite uma senha com pelo menos 8 caracteres",
+    "passwordOptional": "Deixe em branco para manter a senha atual",
+    "resetPassword": "Redefinir senha",
+    "role": "Função",
+    "admin": "Administrador",
+    "normalUser": "Usuário",
+    "status": "Status",
+    "active": "Ativo",
+    "disabled": "Desativado",
+    "createdAt": "Criado em",
+    "enable": "Ativar",
+    "disable": "Desativar",
+    "updateSuccess": "Usuário atualizado",
+    "createSuccess": "Usuário criado",
+    "saveFailed": "Falha ao salvar usuário",
+    "loadFailed": "Falha ao carregar usuários",
+    "deleteTitle": "Excluir usuário",
+    "deleteConfirm": "Excluir o usuário \"{{name}}\"?",
+    "deleteSuccess": "Usuário excluído",
+    "deleteFailed": "Falha ao excluir usuário",
+    "statusUpdated": "Status do usuário atualizado",
+    "forbiddenTitle": "Acesso negado",
+    "forbiddenDescription": "Somente administradores podem gerenciar usuários."
   }
 }

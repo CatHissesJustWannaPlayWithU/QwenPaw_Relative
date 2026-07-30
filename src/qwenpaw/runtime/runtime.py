@@ -151,7 +151,7 @@ class Runtime:
                 await hooks.run(Phase.ON_ERROR, ctx)
             except asyncio.CancelledError:
                 logger.debug(
-                    "ON_ERROR hooks skipped due to asyncio "
+                    "ON_ERROR hooks skipped due to asyncio "    
                     "re-cancellation (session=%s)",
                     getattr(ctx, "session_id", ""),
                 )

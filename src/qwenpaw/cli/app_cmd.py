@@ -16,7 +16,7 @@ from ..utils.platform import auto_disable_sandbox_on_windows
 
 logger = logging.getLogger(__name__)
 
-
+#
 def _format_bind_address(host: str, port: int) -> str:
     """Return a readable bind address for startup logs."""
     normalized_host = host.strip()
@@ -152,8 +152,9 @@ def app_cmd(
     # server starts without a half-broken sandbox layer.
     auto_disable_sandbox_on_windows()
 
+    #表示启动 Uvicorn。Uvicorn 是一个 Web 服务器，它负责监听网络请求。
     uvicorn.run(
-        "qwenpaw.app._app:app",
+        "qwenpaw.app._app:app", #进入 qwenpaw/app/_app.py，找到名字叫 app 的对象
         host=host,
         port=port,
         reload=reload,

@@ -6,9 +6,15 @@ import {
   Tooltip,
   Dropdown,
   Popover,
+  Avatar,
+  Form,
+  Input,
+  Upload,
   message,
 } from "antd";
 import type { MenuProps } from "antd";
+import type { UploadFile } from "antd";
+import { useNavigate } from "react-router-dom";
 import LanguageSwitcher, {
   LANGUAGE_LIST,
 } from "../components/LanguageSwitcher/index";
@@ -39,6 +45,9 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useDesktopUpdate } from "../contexts/DesktopUpdateContext";
 import { isDesktopApp } from "../tauri/backendRuntime";
+import { authApi, type UserProfile } from "../api/modules/auth";
+import { clearAuthToken, setAuthToken } from "../api/config";
+import { useAuthStore } from "../stores/authStore";
 import {
   CopyOutlined,
   CheckOutlined,
@@ -52,6 +61,10 @@ import {
   SyncOutlined,
   CheckCircleOutlined,
   ExclamationCircleOutlined,
+  LogoutOutlined,
+  ProfileOutlined,
+  UploadOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
 
 const { Header: AntHeader } = Layout;
@@ -81,16 +94,220 @@ function UpdateCodeBlock({ code }: { code: string }) {
   );
 }
 
+function readFileAsDataUrl(file: File): Promise<string> {
+  //头像不走独立的文件上传接口，而是作为 Data URL 写入个人资料请求体。
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(new Error("Failed to read avatar"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function UserProfileModal({
+  open,
+  user,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  user: UserProfile;
+  onClose: () => void;
+  onSaved: (user: UserProfile, token: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [form] = Form.useForm();
+  const [loading, setLoading] = useState(false);
+  const [avatar, setAvatar] = useState(user.avatar || "");
+  const [fileList, setFileList] = useState<UploadFile[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    //每次打开弹窗都用最新的全局用户资料重置表单，避免显示上一次编辑的残留值。
+    form.setFieldsValue({ name: user.name });
+    form.setFieldsValue({ newUsername: user.username });
+    setAvatar(user.avatar || "");
+    setFileList([]);
+  }, [form, open, user]);
+
+  const onFinish = async (values: {
+    currentPassword: string;
+    name: string;
+    newUsername?: string;
+    newPassword?: string;
+    confirmPassword?: string;
+  }) => {
+    //在发请求前先做确认密码校验，减少无效的后端请求。
+    if (values.newPassword !== values.confirmPassword) {
+      message.error(t("account.passwordMismatch"));
+      return;
+    }
+    setLoading(true);
+    try {
+      //当前密码、资料修改内容和头像一起提交给 /auth/update-profile。
+      const result = await authApi.updateProfile(
+        values.currentPassword,
+        values.newUsername?.trim() || undefined,
+        values.newPassword?.trim() || undefined,
+        values.name.trim(),
+        avatar,
+      );
+      if (!result.user) {
+        throw new Error(t("account.updateFailed"));
+      }
+      //后端可能因账号或密码变更签发新 token，因此必须覆盖旧 token。
+      setAuthToken(result.token);
+      onSaved(result.user, result.token);
+      onClose();
+      message.success(t("account.updateSuccess"));
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : t("account.updateFailed"));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <Modal
+      open={open}
+      onCancel={onClose}
+      title={t("account.profileTitle", "个人资料")}
+      footer={null}
+      destroyOnHidden
+      centered
+    >
+      <Form
+        form={form}
+        layout="vertical"
+        onFinish={onFinish}
+        initialValues={{ name: user.name }}
+      >
+        <Form.Item label={t("account.avatar", "头像")}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <Avatar
+              size={56}
+              src={avatar || undefined}
+              icon={!avatar ? <UserOutlined /> : undefined}
+            />
+            <Upload
+              accept="image/*"
+              maxCount={1}
+              fileList={fileList}
+              beforeUpload={async (file) => {
+                const dataUrl = await readFileAsDataUrl(file);
+                setAvatar(dataUrl);
+                setFileList([file]);
+                return false;
+              }}
+              onRemove={() => {
+                setAvatar("");
+                setFileList([]);
+              }}
+              showUploadList={{ showPreviewIcon: false }}
+            >
+              <Button icon={<UploadOutlined />}>
+                {t("account.chooseAvatar", "更换头像")}
+              </Button>
+            </Upload>
+          </div>
+        </Form.Item>
+        <Form.Item
+          name="name"
+          label={t("account.displayName", "姓名")}
+          rules={[{ required: true, message: t("login.nameRequired", "请输入姓名") }]}
+        >
+          <Input />
+        </Form.Item>
+        <Form.Item
+          name="newUsername"
+          label={t("account.newUsername")}
+          rules={[{ required: true, message: t("account.usernameEmpty") }]}
+        >
+          <Input placeholder={t("account.newUsernamePlaceholder")} />
+        </Form.Item>
+        <Form.Item
+          name="currentPassword"
+          label={t("account.currentPassword")}
+          rules={[{ required: true, message: t("account.currentPasswordRequired") }]}
+        >
+          <Input.Password />
+        </Form.Item>
+        <Form.Item name="newPassword" label={t("account.newPassword")}>
+          <Input.Password placeholder={t("account.newPasswordPlaceholder")} />
+        </Form.Item>
+        <Form.Item
+          name="confirmPassword"
+          label={t("account.confirmPassword")}
+          dependencies={["newPassword"]}
+          rules={[
+            ({ getFieldValue }) => ({
+              validator(_, value) {
+                if (value === getFieldValue("newPassword")) {
+                  return Promise.resolve();
+                }
+                return Promise.reject(new Error(t("account.passwordMismatch")));
+              },
+            }),
+          ]}
+        >
+          <Input.Password placeholder={t("account.confirmPasswordPlaceholder")} />
+        </Form.Item>
+        <Form.Item style={{ marginBottom: 0 }}>
+          <Button type="primary" htmlType="submit" loading={loading} block>
+            {t("account.save")}
+          </Button>
+        </Form.Item>
+      </Form>
+    </Modal>
+  );
+}
+
 export default function Header() {
   const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
   const { isDark, setThemeMode } = useTheme();
+  const { user, setUser, clear: clearUser } = useAuthStore();
   const desktop = useDesktopUpdate();
   const onDesktop = isDesktopApp();
   const [version, setVersion] = useState<string>("");
   const [latestVersion, setLatestVersion] = useState<string>("");
   const [updateModalOpen, setUpdateModalOpen] = useState(false);
   const [updateMarkdown, setUpdateMarkdown] = useState<string>("");
+  const [profileOpen, setProfileOpen] = useState(false);
   const logoClicksRef = useRef<number[]>([]);
+
+  const handleLogout = async () => {
+    try {
+      //优先请求后端撤销 token，使其他请求不能继续使用当前会话。
+      await authApi.logout();
+    } catch {
+      //服务不可用时仍要清除本地 token，确保这台浏览器完成退出登录。
+    } finally {
+      clearAuthToken();
+      clearUser();
+      navigate("/login", { replace: true });
+    }
+  };
+
+  //点击头像后使用的下拉菜单；资料编辑只打开弹窗，提交逻辑由 UserProfileModal 处理。
+  const userMenuItems: MenuProps["items"] = user
+    ? [
+        {
+          key: "profile",
+          icon: <ProfileOutlined />,
+          label: t("account.profileTitle", "个人资料"),
+          onClick: () => setProfileOpen(true),
+        },
+        { type: "divider" },
+        {
+          key: "logout",
+          danger: true,
+          icon: <LogoutOutlined />,
+          label: t("login.logout"),
+          onClick: () => void handleLogout(),
+        },
+      ]
+    : [];
 
   useEffect(() => {
     api
@@ -345,7 +562,7 @@ export default function Header() {
           */}
           <Slot name="header.logo" kind="replace">
             <img
-              src={isDark ? "/logo-dark.svg" : "/logo-light.svg"}
+              src={isDark ? "/logo-dark.png" : "/logo-light.png"}
               alt="QwenPaw"
               className={styles.logoImg}
             />
@@ -458,6 +675,33 @@ export default function Header() {
           <span className={styles.hideOnMobile}>
             <ThemeToggleButton />
           </span>
+          {user && (
+            <Dropdown
+              menu={{ items: userMenuItems }}
+              placement="bottomRight"
+              trigger={["click"]}
+            >
+              <Button
+                type="text"
+                className={styles.userMenuTrigger}
+                title={t("account.profileTitle", "个人资料")}
+              >
+                <Avatar
+                  size={30}
+                  src={user.avatar || undefined}
+                  icon={!user.avatar ? <UserOutlined /> : undefined}
+                />
+                <span className={styles.userMenuText}>
+                  <span className={styles.userMenuName}>{user.name}</span>
+                  <span className={styles.userMenuRole}>
+                    {user.role === "admin"
+                      ? t("account.adminRole", "管理员")
+                      : t("account.userRole", "普通用户")}
+                  </span>
+                </span>
+              </Button>
+            </Dropdown>
+          )}
           <Dropdown menu={{ items: mobileMenuItems }} placement="bottomRight">
             <Button
               type="text"
@@ -567,6 +811,15 @@ export default function Header() {
           )}
         </div>
       </Modal>
+
+      {user && (
+        <UserProfileModal
+          open={profileOpen}
+          user={user}
+          onClose={() => setProfileOpen(false)}
+          onSaved={(nextUser) => setUser(nextUser)}
+        />
+      )}
     </>
   );
 }

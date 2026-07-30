@@ -36,6 +36,7 @@ import { authApi } from "./api/modules/auth";
 import { languageApi } from "./api/modules/language";
 import { useUploadLimitStore } from "./stores/uploadLimitStore";
 import { getApiUrl, getApiToken, clearAuthToken } from "./api/config";
+import { useAuthStore } from "./stores/authStore";
 import CloseWindowPrompt from "./tauri/CloseWindowPrompt";
 import { isTauri } from "@tauri-apps/api/core";
 import "./styles/layout.css";
@@ -65,6 +66,7 @@ const GlobalStyle = createGlobalStyle`
 `;
 
 function AuthGuard({ children }: { children: React.ReactNode }) {
+  //loading 防止认证状态尚未确定时短暂渲染受保护页面。
   const [status, setStatus] = useState<"loading" | "auth-required" | "ok">(
     "loading",
   );
@@ -73,36 +75,49 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
     let cancelled = false;
     (async () => {
       try {
+        //第一步：确认后端是否启用了用户认证功能。
         const res = await authApi.getStatus();
         if (cancelled) return;
         if (!res.enabled) {
+          useAuthStore.getState().clear();
           setStatus("ok");
           return;
         }
         const token = getApiToken();
         if (!token) {
+          useAuthStore.getState().clear();
           setStatus("auth-required");
           return;
         }
         try {
+          //第二步：token 存在时先验证它，避免拿着过期 token 请求完整资料。
           const r = await fetch(getApiUrl("/auth/verify"), {
             headers: { Authorization: `Bearer ${token}` },
           });
           if (cancelled) return;
           if (r.ok) {
+            //第三步：验证通过后获取头像、姓名和角色，写入全局状态供 Header 和菜单使用。
+            const user = await authApi.getMe();
+            useAuthStore.getState().setUser(user);
             setStatus("ok");
           } else {
             clearAuthToken();
+            useAuthStore.getState().clear();
             setStatus("auth-required");
           }
         } catch {
           if (!cancelled) {
             clearAuthToken();
+            useAuthStore.getState().clear();
             setStatus("auth-required");
           }
         }
       } catch {
-        if (!cancelled) setStatus("ok");
+        if (!cancelled) {
+          //状态接口不可用时保持兼容旧版未认证部署；真正的受保护接口仍由后端鉴权。
+          useAuthStore.getState().clear();
+          setStatus("ok");
+        }
       }
     })();
     return () => {
@@ -111,6 +126,7 @@ function AuthGuard({ children }: { children: React.ReactNode }) {
   }, []);
 
   if (status === "loading") return null;
+  //记录原路径，登录成功后可以回到用户最初要访问的页面。
   if (status === "auth-required")
     return (
       <Navigate

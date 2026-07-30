@@ -4,6 +4,7 @@ import { authApi } from "./auth";
 // auth.ts uses fetch directly (not the request wrapper), so mock global fetch
 vi.mock("../config", () => ({
   getApiUrl: (path: string) => `/api${path}`,
+  getApiToken: () => localStorage.getItem("qwenpaw_auth_token") || "",
 }));
 
 function mockFetch(status: number, body: unknown) {

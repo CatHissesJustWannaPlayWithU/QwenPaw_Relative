@@ -75,7 +75,8 @@
     "plugins": "プラグイン",
     "acp": "ACP",
     "backups": "バックアップ",
-    "pluginManager": "プラグインマネージャー"
+    "pluginManager": "プラグインマネージャー",
+    "users": "ユーザー管理"
   },
   "debug": {
     "title": "デバッグ",
@@ -2823,5 +2824,46 @@
   },
   "loop": {
     "gotoSettings": "エージェント Loop 設定"
+  },
+  "users": {
+    "title": "ユーザー管理",
+    "description": "QwenPaw のアカウント、アバター、名前、権限を管理します。",
+    "total": "{{count}} 人のユーザー",
+    "empty": "ユーザーがいません",
+    "add": "ユーザーを追加",
+    "editTitle": "ユーザーを編集",
+    "addTitle": "ユーザーを追加",
+    "userId": "ユーザー ID",
+    "user": "ユーザー",
+    "avatar": "アバター",
+    "chooseAvatar": "アバターを選択",
+    "name": "名前",
+    "nameRequired": "名前を入力してください",
+    "username": "ユーザー名",
+    "usernameRequired": "ユーザー名を入力してください",
+    "password": "パスワード",
+    "passwordRequired": "8 文字以上のパスワードを入力してください",
+    "passwordOptional": "変更しない場合は空欄",
+    "resetPassword": "パスワードをリセット",
+    "role": "権限",
+    "admin": "管理者",
+    "normalUser": "一般ユーザー",
+    "status": "ステータス",
+    "active": "有効",
+    "disabled": "無効",
+    "createdAt": "作成日時",
+    "enable": "有効化",
+    "disable": "無効化",
+    "updateSuccess": "ユーザーを更新しました",
+    "createSuccess": "ユーザーを作成しました",
+    "saveFailed": "ユーザーの保存に失敗しました",
+    "loadFailed": "ユーザーの読み込みに失敗しました",
+    "deleteTitle": "ユーザーを削除",
+    "deleteConfirm": "ユーザー「{{name}}」を削除しますか？",
+    "deleteSuccess": "ユーザーを削除しました",
+    "deleteFailed": "ユーザーの削除に失敗しました",
+    "statusUpdated": "ユーザーステータスを更新しました",
+    "forbiddenTitle": "アクセス拒否",
+    "forbiddenDescription": "ユーザー管理は管理者のみ利用できます。"
   }
 }

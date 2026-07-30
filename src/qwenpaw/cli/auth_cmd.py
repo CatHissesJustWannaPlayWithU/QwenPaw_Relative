@@ -35,7 +35,11 @@ def reset_password_cmd() -> None:
             "Failed to read auth data. Check auth.json for corruption.",
         )
 
-    user = data.get("user")
+    users = data.get("users") or []
+    user = next(
+        (item for item in users if item.get("role") == "admin"),
+        data.get("user"),
+    )
     if not user:
         click.echo("No registered user found. Nothing to reset.")
         return
@@ -53,8 +57,24 @@ def reset_password_cmd() -> None:
         raise click.ClickException("Password cannot be empty.")
 
     pw_hash, salt = _hash_password(new_password)
-    data["user"]["password_hash"] = pw_hash
-    data["user"]["password_salt"] = salt
+    if users:
+        user["password_hash"] = pw_hash
+        user["password_salt"] = salt
+        data["user"] = {
+            key: user.get(key, "")
+            for key in (
+                "username",
+                "password_hash",
+                "password_salt",
+                "name",
+                "avatar",
+                "created_at",
+                "last_login",
+            )
+        }
+    else:
+        data["user"]["password_hash"] = pw_hash
+        data["user"]["password_salt"] = salt
 
     # Invalidate existing tokens by rotating jwt_secret
     data["jwt_secret"] = secrets.token_hex(32)
