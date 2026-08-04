@@ -63,6 +63,7 @@ from ...agents.skill_system.store import (
     resolve_pool_skill_dir,
     suggest_conflict_name,
 )
+from ...config import load_config
 from ...security.skill_scanner import SkillScanError
 from ..inbox_store import append_event as append_inbox_event
 from ..utils import check_upload_size, schedule_agent_reload
@@ -356,6 +357,8 @@ class HubInstallTask(BaseModel):
     status: HubInstallTaskStatus = HubInstallTaskStatus.PENDING
     error: str | None = None
     result: dict[str, Any] | None = None
+    # 任务在进程内保存；归属字段不返回给前端，只用于状态查询与取消校验。
+    owner_user_id: str | None = Field(default=None, exclude=True)
     created_at: float = Field(default_factory=time.time)
     updated_at: float = Field(default_factory=time.time)
 
@@ -780,9 +783,25 @@ async def search_hub(
 
 
 @router.get("/workspaces")
-async def list_workspace_skill_sources() -> list[WorkspaceSkillSummary]:
+async def list_workspace_skill_sources(
+    request: Request,
+) -> list[WorkspaceSkillSummary]:
     summaries: list[WorkspaceSkillSummary] = []
     workspaces = list_workspaces()
+    principal = getattr(request.state, "principal", None)
+    if principal is not None:
+        config = load_config()
+        workspaces = [
+            workspace
+            for workspace in workspaces
+            if (
+                config.agents.profiles.get(workspace["agent_id"]) is not None
+                and config.agents.profiles[
+                    workspace["agent_id"]
+                ].owner_user_id
+                == principal.user_id
+            )
+        ]
     for workspace in workspaces:
         workspace_dir = Path(workspace["workspace_dir"])
         summaries.append(
@@ -802,10 +821,12 @@ async def start_install_from_hub(
     request: Request,
 ) -> HubInstallTask:
     workspace_dir = await _request_workspace_dir(request)
+    principal = getattr(request.state, "principal", None)
     task = HubInstallTask(
         bundle_url=request_body.bundle_url,
         version=request_body.version,
         enable=request_body.enable,
+        owner_user_id=(principal.user_id if principal is not None else None),
     )
     cancel_event = threading.Event()
     async with _hub_install_lock:
@@ -826,15 +847,24 @@ async def start_install_from_hub(
 
 
 @router.get("/hub/install/status/{task_id}", response_model=HubInstallTask)
-async def get_hub_install_status(task_id: str) -> HubInstallTask:
+async def get_hub_install_status(
+    task_id: str,
+    request: Request,
+) -> HubInstallTask:
     task = await _hub_task_get(task_id)
     if task is None:
+        raise HTTPException(status_code=404, detail="install task not found")
+    principal = getattr(request.state, "principal", None)
+    if (
+        principal is not None
+        and task.owner_user_id != principal.user_id
+    ):
         raise HTTPException(status_code=404, detail="install task not found")
     return task
 
 
 @router.post("/hub/install/cancel/{task_id}")
-async def cancel_hub_install(task_id: str) -> dict[str, Any]:
+async def cancel_hub_install(task_id: str, request: Request) -> dict[str, Any]:
     async with _hub_install_lock:
         task = _hub_install_tasks.get(task_id)
         if task is None:
@@ -842,6 +872,12 @@ async def cancel_hub_install(task_id: str) -> dict[str, Any]:
                 status_code=404,
                 detail="install task not found",
             )
+        principal = getattr(request.state, "principal", None)
+        if (
+            principal is not None
+            and task.owner_user_id != principal.user_id
+        ):
+            raise HTTPException(status_code=404, detail="install task not found")
         if task.status in _HUB_INSTALL_TERMINAL_STATUSES:
             return {"task_id": task_id, "status": task.status.value}
         cancel_event = _hub_install_cancel_events.get(task_id)

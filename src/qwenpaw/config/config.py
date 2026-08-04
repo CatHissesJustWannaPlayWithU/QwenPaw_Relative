@@ -1401,6 +1401,10 @@ class AgentProfileRef(BaseModel):
         ...,
         description="Path to agent's workspace directory",
     )
+    owner_user_id: str | None = Field(
+        default=None,
+        description="拥有该智能体的用户 ID；None 表示等待归属迁移的旧智能体",
+    )
     enabled: bool = Field(
         default=True,
         description="Whether agent is enabled (controls instance loading)",

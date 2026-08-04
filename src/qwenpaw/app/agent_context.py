@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 from fastapi import Request
 from .multi_agent_manager import MultiAgentManager
+from .principal import Principal
 from ..config.utils import load_config
 
 if TYPE_CHECKING:
@@ -66,6 +67,14 @@ async def get_agent_for_request(
     """
     from fastapi import HTTPException
 
+    # 认证中间件启用时会写入 Principal；未启用认证的旧部署保留原行为。
+    principal = getattr(request.state, "principal", None)
+    if principal is not None and not isinstance(principal, Principal):
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication context is invalid",
+        )
+
     # Determine which agent to use
     target_agent_id = agent_id
 
@@ -77,16 +86,33 @@ async def get_agent_for_request(
     if not target_agent_id:
         target_agent_id = request.headers.get("X-Agent-Id")
 
-    # Load config once for fallback and validation
-    config = None
+    # 统一读取配置，随后既校验 Agent 存在性，也校验它是否属于当前用户。
+    config = load_config()
     if not target_agent_id:
-        # Fallback to active agent from config
-        config = load_config()
-        target_agent_id = config.agents.active_agent or "default"
+        # 全局 active_agent 可能属于另一个用户，不能直接作为登录用户的默认 Agent。
+        active_agent_id = config.agents.active_agent or "default"
+        active_agent = config.agents.profiles.get(active_agent_id)
+        if (
+            principal is None
+            or (
+                active_agent is not None
+                and active_agent.owner_user_id == principal.user_id
+            )
+        ):
+            target_agent_id = active_agent_id
+        else:
+            # 没有显式选择时，选择当前用户在全局顺序中排在最前面的 Agent。
+            ordered_ids = [
+                *config.agents.agent_order,
+                *config.agents.profiles.keys(),
+            ]
+            for candidate_id in dict.fromkeys(ordered_ids):
+                candidate = config.agents.profiles.get(candidate_id)
+                if candidate and candidate.owner_user_id == principal.user_id:
+                    target_agent_id = candidate_id
+                    break
 
     # Check if agent exists and is enabled
-    if config is None:
-        config = load_config()
     if target_agent_id not in config.agents.profiles:
         raise HTTPException(
             status_code=404,
@@ -94,6 +120,15 @@ async def get_agent_for_request(
         )
 
     agent_ref = config.agents.profiles[target_agent_id]
+
+    # X-Agent-Id 和路径中的 agentId 都来自客户端，只能表示“想访问谁”。
+    # 是否允许访问必须由服务端保存的 owner_user_id 与当前用户 ID 决定。
+    if principal is not None and agent_ref.owner_user_id != principal.user_id:
+        raise HTTPException(
+            status_code=404,
+            detail="Agent not found",
+        )
+
     if not getattr(agent_ref, "enabled", True):
         raise HTTPException(
             status_code=403,
@@ -133,7 +168,8 @@ def get_coding_dir(workspace: "Workspace") -> Path:
     """Return the active coding project directory for *workspace*.
 
     If the agent has set a ``coding_mode.project_dir`` in its config, that
-    path is returned.  Otherwise the agent's default ``workspace_dir`` is used.
+    path is returned only when it stays inside this agent's workspace.
+    Otherwise the agent's default ``workspace_dir`` is used.
     """
     from ..config.config import load_agent_config
 
@@ -145,9 +181,16 @@ def get_coding_dir(workspace: "Workspace") -> Path:
     except Exception:
         project_dir = None
 
+    workspace_dir = workspace.workspace_dir.resolve()
     if project_dir:
-        return Path(project_dir).expanduser().resolve()
-    return workspace.workspace_dir
+        candidate = Path(project_dir).expanduser().resolve()
+        projects_dir = workspace_dir / "coding_projects"
+        if candidate == workspace_dir or candidate.is_relative_to(projects_dir):
+            return candidate
+
+    # 旧配置可能记录了任意绝对路径。不能让它把代码、Git 与文件接口
+    # 带到另一个用户的目录，因此在边界外时安全地回退到本工作区。
+    return workspace_dir
 
 
 def get_active_agent_id() -> str:

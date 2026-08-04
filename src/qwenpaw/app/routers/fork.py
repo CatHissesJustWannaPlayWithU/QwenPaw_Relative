@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ...config.config import load_agent_config
+from ..agent_context import get_agent_for_request, get_coding_dir
 from ..chats.session import sanitize_filename
 
 logger = logging.getLogger(__name__)
@@ -292,8 +293,17 @@ async def fork_agent(
     """
     _enforce_localhost(request)
 
-    project_dir = _get_project_dir(req.agent_id)
-    sessions_dir = _get_sessions_dir(req.agent_id)
+    # 即便请求来自 localhost，agent_id 仍是调用方传来的选择条件。
+    # 先通过已有的 Agent 上下文解析入口校验所属用户，再访问会话与项目目录。
+    workspace = await get_agent_for_request(request, agent_id=req.agent_id)
+    candidate_project_dir = get_coding_dir(workspace)
+    project_dir = (
+        candidate_project_dir
+        if candidate_project_dir.is_dir()
+        and (candidate_project_dir / ".git").exists()
+        else None
+    )
+    sessions_dir = workspace.workspace_dir / "sessions"
 
     parent_file = _session_path(
         sessions_dir,

@@ -110,7 +110,11 @@ async def list_events(
     return events[offset : offset + max(limit, 0)]
 
 
-async def mark_read(event_ids: list[str]) -> int:
+async def mark_read(
+    event_ids: list[str],
+    *,
+    agent_id: str | None = None,
+) -> int:
     if not event_ids:
         return 0
     event_id_set = set(event_ids)
@@ -118,26 +122,37 @@ async def mark_read(event_ids: list[str]) -> int:
     async with _LOCK:
         events = _load_events()
         for event in events:
-            if event.get("id") in event_id_set and not bool(event.get("read")):
+            if (
+                event.get("id") in event_id_set
+                and (agent_id is None or event.get("agent_id") == agent_id)
+                and not bool(event.get("read"))
+            ):
                 event["read"] = True
                 updated += 1
         _save_events(events)
     return updated
 
 
-async def mark_all_read() -> int:
+async def mark_all_read(*, agent_id: str | None = None) -> int:
     updated = 0
     async with _LOCK:
         events = _load_events()
         for event in events:
-            if not bool(event.get("read")):
+            if (
+                (agent_id is None or event.get("agent_id") == agent_id)
+                and not bool(event.get("read"))
+            ):
                 event["read"] = True
                 updated += 1
         _save_events(events)
     return updated
 
 
-async def delete_event(event_id: str) -> tuple[bool, str | None, bool]:
+async def delete_event(
+    event_id: str,
+    *,
+    agent_id: str | None = None,
+) -> tuple[bool, str | None, bool]:
     if not event_id:
         return False, None, False
     deleted = False
@@ -147,7 +162,11 @@ async def delete_event(event_id: str) -> tuple[bool, str | None, bool]:
         events = _load_events()
         kept_events = []
         for event in events:
-            if not deleted and event.get("id") == event_id:
+            if (
+                not deleted
+                and event.get("id") == event_id
+                and (agent_id is None or event.get("agent_id") == agent_id)
+            ):
                 payload = event.get("payload") or {}
                 if isinstance(payload, dict) and isinstance(
                     payload.get("run_id"),
@@ -169,3 +188,15 @@ async def delete_event(event_id: str) -> tuple[bool, str | None, bool]:
         if deleted:
             _save_events(kept_events)
     return deleted, deleted_run_id, run_id_still_referenced
+
+
+async def has_event_for_run_id(run_id: str, *, agent_id: str) -> bool:
+    """Return whether an agent-owned inbox event references *run_id*."""
+    async with _LOCK:
+        events = _load_events()
+    return any(
+        event.get("agent_id") == agent_id
+        and isinstance(event.get("payload"), dict)
+        and event["payload"].get("run_id") == run_id
+        for event in events
+    )

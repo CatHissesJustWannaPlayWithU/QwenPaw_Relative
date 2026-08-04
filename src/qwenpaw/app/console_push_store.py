@@ -19,7 +19,13 @@ _MAX_AGE_SECONDS = 60
 _MAX_MESSAGES = 500
 
 
-async def append(session_id: str, text: str, *, sticky: bool = False) -> None:
+async def append(
+    session_id: str,
+    text: str,
+    *,
+    sticky: bool = False,
+    agent_id: str | None = None,
+) -> None:
     """Append a message (bounded: oldest dropped if over _MAX_MESSAGES)."""
     if not session_id or not text:
         return
@@ -31,6 +37,7 @@ async def append(session_id: str, text: str, *, sticky: bool = False) -> None:
                 "sticky": sticky,
                 "ts": time.time(),
                 "session_id": session_id,
+                "agent_id": agent_id,
             },
         )
         if len(_list) > _MAX_MESSAGES:
@@ -38,7 +45,11 @@ async def append(session_id: str, text: str, *, sticky: bool = False) -> None:
             del _list[: len(_list) - _MAX_MESSAGES]
 
 
-async def take(session_id: str) -> List[Dict[str, Any]]:
+async def take(
+    session_id: str,
+    *,
+    agent_id: str | None = None,
+) -> List[Dict[str, Any]]:
     """Return and remove all messages for the session."""
     if not session_id:
         return []
@@ -47,7 +58,10 @@ async def take(session_id: str) -> List[Dict[str, Any]]:
         out = []
         remaining = []
         for msg in _list:
-            if msg.get("session_id") == session_id:
+            if (
+                msg.get("session_id") == session_id
+                and (agent_id is None or msg.get("agent_id") == agent_id)
+            ):
                 out.append(msg)
             else:
                 remaining.append(msg)
@@ -83,6 +97,8 @@ def _prune_expired_locked(max_age_seconds: int) -> None:
 
 async def get_recent(
     max_age_seconds: int = _MAX_AGE_SECONDS,
+    *,
+    agent_id: str | None = None,
 ) -> List[Dict[str, Any]]:
     """
     Return recent messages (not consumed). Drop older than max_age_seconds
@@ -93,4 +109,9 @@ async def get_recent(
 
     async with _lock:
         _prune_expired_locked(max_age_seconds)
-        return _strip_ts(_list)
+        messages = [
+            message
+            for message in _list
+            if agent_id is None or message.get("agent_id") == agent_id
+        ]
+        return _strip_ts(messages)

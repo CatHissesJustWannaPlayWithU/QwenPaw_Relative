@@ -659,7 +659,11 @@ class ConsoleChannel(BaseChannel):
             and text.strip()
             and not (meta or {}).get("suppress_console_push")
         ):
-            await push_store_append(sid, text.strip())
+            await push_store_append(
+                sid,
+                text.strip(),
+                agent_id=getattr(self, "_agent_id", None),
+            )
 
     async def send_content_parts(
         self,
@@ -675,7 +679,11 @@ class ConsoleChannel(BaseChannel):
         if sid and not (meta or {}).get("suppress_console_push"):
             body = self._parts_to_text(parts, meta)
             if body.strip():
-                await push_store_append(sid, body.strip())
+                await push_store_append(
+                    sid,
+                    body.strip(),
+                    agent_id=getattr(self, "_agent_id", None),
+                )
 
     # ── lifecycle ───────────────────────────────────────────────────
 

@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from qwenpaw.exceptions import (
     AppBaseException,
 )
+from ...config import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,17 @@ async def send_message(
     """
     # Get agent ID (default to "default" if not provided)
     agent_id = x_agent_id or "default"
+
+    # 此路由不经过 get_agent_for_request()，因此要在获取运行时 Workspace
+    # 前直接校验请求用户是否拥有目标 Agent。
+    principal = getattr(http_request.state, "principal", None)
+    if principal is not None:
+        agent_ref = load_config().agents.profiles.get(agent_id)
+        if (
+            agent_ref is None
+            or agent_ref.owner_user_id != principal.user_id
+        ):
+            raise HTTPException(status_code=404, detail="Agent not found")
 
     # Get multi-agent manager from app state (via request)
     multi_agent_manager = _get_multi_agent_manager(http_request)

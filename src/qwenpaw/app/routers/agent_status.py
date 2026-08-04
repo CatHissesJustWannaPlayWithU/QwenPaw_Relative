@@ -75,6 +75,13 @@ async def get_agent_status(
         )
 
     agent_ref = config.agents.profiles[agent_id]
+    principal = getattr(request.state, "principal", None)
+    if (
+        principal is not None
+        and agent_ref.owner_user_id != principal.user_id
+    ):
+        raise HTTPException(status_code=404, detail="Agent not found")
+
     is_enabled = getattr(agent_ref, "enabled", True)
 
     # If disabled, return disabled status immediately

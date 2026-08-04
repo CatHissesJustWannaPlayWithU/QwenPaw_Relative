@@ -48,6 +48,7 @@ from .migration import (
     migrate_legacy_skills_to_skill_pool,
     migrate_legacy_workspace_to_default_agent,
 )
+from .user_provisioning import migrate_legacy_agents_to_first_admin
 from .routers import create_agent_scoped_router
 from .routers import router as api_router
 from .routers.agent_scoped import AgentContextMiddleware
@@ -210,6 +211,9 @@ async def lifespan(  # pylint: disable=too-many-statements,too-many-branches
     ensure_default_agent_exists()
     migrate_legacy_skills_to_skill_pool()
     ensure_qa_agent_exists()
+    # 认证已开启的旧安装没有 owner_user_id；在全部资料都是旧格式时，
+    # 将原有智能体一次性交给首个管理员，避免升级后资源无人可访问。
+    migrate_legacy_agents_to_first_admin()
 
     # Migrate old conversations from sessions/*.json into each scroll agent's
     # history.db, so chats from before scroll existed stay recallable. This is

@@ -148,6 +148,8 @@ async def create_channel_service(ws: "Workspace", _):
     agent_language = getattr(ws._config, "language", "zh") or "zh"
     for ch in cm.channels:
         ch._language = agent_language
+        # 控制台推送在进程内短暂缓存，也必须带上所属 Agent 才能按用户隔离。
+        ch._agent_id = ws.agent_id
 
     return cm
     # pylint: enable=protected-access

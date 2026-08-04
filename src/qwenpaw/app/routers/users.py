@@ -15,6 +15,7 @@ from ..auth import (
     update_managed_user,
     verify_token,
 )
+from ...config import load_config
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -151,6 +152,29 @@ async def update_user(
 @router.delete("/{user_id}")
 async def delete_user(user_id: str, request: Request): #delete_user()为删除用户接口函数
     current_username = _require_admin(request)
+    target_user = next(
+        (item for item in list_public_users() if item["id"] == user_id),
+        None,
+    )
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # 所属用户删除后若仍保留智能体，资源会成为无人可访问的孤儿数据。
+    # 这里拒绝删除，要求管理员先完成资源迁移或清理；禁用账号不受影响。
+    owned_agent_ids = [
+        agent_id
+        for agent_id, agent_ref in load_config().agents.profiles.items()
+        if agent_ref.owner_user_id == user_id
+    ]
+    if owned_agent_ids:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Cannot delete a user who still owns agents: "
+                + ", ".join(owned_agent_ids)
+            ),
+        )
+
     try:
         # 业务层会阻止删除自己，以及删除系统中最后一个管理员。
         deleted = delete_managed_user(user_id, current_username)

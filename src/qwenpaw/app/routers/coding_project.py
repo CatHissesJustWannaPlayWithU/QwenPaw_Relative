@@ -127,7 +127,8 @@ async def set_project(body: SetProjectRequest, request: Request) -> dict:
     """Set the active coding project directory.
 
     Pass ``{"path": null}`` to reset to the default workspace directory.
-    Pass ``{"path": "/absolute/path"}`` to use that directory.
+    Pass a path inside the current agent's ``coding_projects/`` directory
+    to select one of this agent's existing projects.
     """
     workspace = await get_agent_for_request(request)
 
@@ -143,6 +144,15 @@ async def set_project(body: SetProjectRequest, request: Request) -> dict:
             raise HTTPException(
                 status_code=400,
                 detail=f"Path is not a directory: {target}",
+            )
+        projects_base = _projects_base(workspace.workspace_dir).resolve()
+        if not target.is_relative_to(projects_base):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Coding project must be inside this agent's "
+                    "coding_projects directory."
+                ),
             )
         project_dir: str | None = str(target)
     else:
@@ -335,6 +345,16 @@ async def import_local(body: ImportLocalRequest, request: Request) -> dict:
     the existing history is available in the copy.
     """
     workspace = await get_agent_for_request(request)
+    principal = getattr(request.state, "principal", None)
+    if principal is not None:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Importing arbitrary server directories is unavailable "
+                "when user isolation is enabled. Use ZIP upload or Git clone."
+            ),
+        )
+
     source = await asyncio.to_thread(
         lambda: Path(body.path).expanduser().resolve(),
     )
@@ -469,6 +489,7 @@ async def upload_zip(
     summary="Browse directories on the server for project selection",
 )
 async def browse_dirs(
+    request: Request,
     path: str = Query(
         default="~",
         description="Directory to list (default: home)",
@@ -483,6 +504,15 @@ async def browse_dirs(
     On Windows, ``"/"`` is treated as a virtual root that
     lists all available drive letters (C:, D:, ...).
     """
+    if getattr(request.state, "principal", None) is not None:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Browsing arbitrary server directories is unavailable "
+                "when user isolation is enabled."
+            ),
+        )
+
     # Windows virtual root: list all drive letters
     if sys.platform == "win32" and path in ("/", "\\"):
         return await asyncio.to_thread(

@@ -36,6 +36,7 @@ from ..security.secret_store import (
     encrypt_dict_fields,
     is_encrypted,
 )
+from .principal import Principal
 
 logger = logging.getLogger(__name__)
 
@@ -52,18 +53,18 @@ TOKEN_EXPIRY_SECONDS = 7 * 24 * 3600
 # token 最大有效期：100 年，用于“永久 token”
 TOKEN_EXPIRY_MAX = 100 * 365 * 24 * 3600
 
-# 不需要认证的完整路径
-_PUBLIC_PATHS: frozenset[str] = frozenset(
-    {
-        "/api/auth/login",
-        "/api/auth/status",
-        "/api/auth/register",
-        "/api/version",
-        "/api/settings/language",
-        "/api/settings/upload-limit",
-        "/api/frontend_plugin",
-    },
-)
+# 不需要认证的完整接口及其允许的 HTTP 方法。
+# 不能只按路径放行：/api/settings/language 的 GET 供登录页读取，
+# 但 PUT 会修改服务器全局配置，必须经过认证和管理员权限校验。
+_PUBLIC_METHODS_BY_PATH: dict[str, frozenset[str]] = {
+    "/api/auth/login": frozenset({"POST"}),
+    "/api/auth/status": frozenset({"GET"}),
+    "/api/auth/register": frozenset({"POST"}),
+    "/api/version": frozenset({"GET"}),
+    "/api/settings/language": frozenset({"GET"}),
+    "/api/settings/upload-limit": frozenset({"GET"}),
+    "/api/frontend_plugin": frozenset({"GET"}),
+}
 
 # 不需要认证的路径前缀，主要用于静态资源
 # /api/frontend_plugin/ 只注册只读 GET 接口，包含列表与静态文件读取。
@@ -935,6 +936,35 @@ def _ip_in_networks(ip_str: str, networks: list) -> bool:
 # 缓存认证高频路径需要的配置，避免每个请求都读取磁盘
 _auth_config_cache: tuple = (0, None, [])
 
+# 这些路由修改的是整台 QwenPaw 服务共享的配置、凭证或安装内容，
+# 不是某个 Agent 工作区中的个人资源。登录模式下仅管理员可调用。
+_ADMIN_ONLY_API_PREFIXES = (
+    "/api/doctor",
+    "/api/backup",
+    "/api/config",
+    "/api/envs",
+    "/api/local-models",
+    "/api/models",
+    "/api/providers",
+    "/api/settings",
+    "/api/token-usage",
+    "/api/users",
+    "/api/console/debug",
+    "/api/loops",
+)
+
+# 同一工作区路由会同时挂载在 /api/workspace 和
+# /api/agents/{agentId}/workspace 下。因此不能只匹配开头路径，
+# 否则普通用户可经由带 Agent ID 的别名修改服务器共享能力。
+_ADMIN_ONLY_API_PATH_FRAGMENTS = (
+    "/plugins",
+    "/skills/pool",
+    "/workspace/audio-",
+    "/workspace/transcription-",
+    "/workspace/local-whisper",
+    "/workspace/transcribe",
+)
+
 
 def _get_config_cached():
     """使用文件修改时间缓存，返回 ``(config, trusted_networks)``。"""
@@ -1035,7 +1065,33 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 media_type="application/json",
             )
 
+        path = request.url.path
+        if (
+            user_record.get("role") != "admin"
+            and (
+                path.startswith(_ADMIN_ONLY_API_PREFIXES)
+                or any(
+                    fragment in path
+                    for fragment in _ADMIN_ONLY_API_PATH_FRAGMENTS
+                )
+            )
+        ):
+            return Response(
+                content='{"detail":"Administrator permission required"}',
+                status_code=403,
+                media_type="application/json",
+            )
+
+        # 保留旧的用户名字段，避免已有代码行为变化。
         request.state.user = user
+
+        # 将稳定用户 ID、用户名和角色绑定到当前请求，供后续资源授权使用。
+        request.state.principal = Principal(
+            user_id=str(user_record["id"]),
+            username=str(user_record["username"]),
+            role=str(user_record["role"]),
+        )
+
         return await call_next(request)
 
     @staticmethod
@@ -1048,7 +1104,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         if (
             request.method == "OPTIONS"
-            or path in _PUBLIC_PATHS
+            or request.method in _PUBLIC_METHODS_BY_PATH.get(
+                path,
+                frozenset(),
+            )
             or any(path.startswith(p) for p in _PUBLIC_PREFIXES)
             or not path.startswith("/api/")
         ):

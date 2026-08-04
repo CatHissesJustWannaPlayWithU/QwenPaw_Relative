@@ -190,8 +190,13 @@ def _read_profile_description(workspace_dir: str) -> str:
     summary="List all agents",
     description="Get list of all configured agents",
 )
-async def list_agents(request: Request = None) -> AgentListResponse:
+async def list_agents(request: Request) -> AgentListResponse:
     """List all configured agents."""
+    # 登录模式下身份来自认证中间件验证后的 Token，而不是前端参数。
+    # 未启用认证的单机部署没有 principal，因此保持原先可见全部智能体的行为。
+    principal = getattr(request.state, "principal", None)
+    current_user_id = principal.user_id if principal is not None else None
+
     config = load_config()
     manager = (
         _get_multi_agent_manager(request) if request is not None else None
@@ -201,6 +206,14 @@ async def list_agents(request: Request = None) -> AgentListResponse:
     agents = []
     for agent_id in ordered_agent_ids:
         agent_ref = config.agents.profiles[agent_id]
+
+        # 已登录时只返回当前用户拥有的智能体。
+        # owner_user_id 为 None 的旧智能体暂时不对任何已登录用户显示。
+        if (
+            current_user_id is not None
+            and agent_ref.owner_user_id != current_user_id
+        ):
+            continue
         enabled = getattr(agent_ref, "enabled", True)
         pinned = agent_id == "default" or getattr(
             agent_ref,
@@ -264,10 +277,20 @@ async def list_agents(request: Request = None) -> AgentListResponse:
 )
 async def reorder_agents(
     reorder_request: ReorderAgentsRequest = Body(...),
+    request: Request = None,
 ) -> dict:
     """Persist the full ordered list of agent IDs."""
     config = load_config()
-    configured_ids = list(config.agents.profiles.keys())
+    principal = getattr(getattr(request, "state", None), "principal", None)
+    current_user_id = principal.user_id if principal is not None else None
+    configured_ids = [
+        agent_id
+        for agent_id, agent_ref in config.agents.profiles.items()
+        if (
+            current_user_id is None
+            or agent_ref.owner_user_id == current_user_id
+        )
+    ]
 
     if len(reorder_request.agent_ids) != len(set(reorder_request.agent_ids)):
         raise HTTPException(
@@ -290,10 +313,21 @@ async def reorder_agents(
             ),
         )
 
-    config.agents.agent_order = list(reorder_request.agent_ids)
+    # agent_order 是历史遗留的全局配置。只替换当前用户拥有的位置，
+    # 其他用户的顺序保留，防止一个用户覆盖整份全局顺序。
+    requested_ids = iter(reorder_request.agent_ids)
+    owned_ids = set(configured_ids)
+    config.agents.agent_order = [
+        (
+            next(requested_ids)
+            if agent_id in owned_ids
+            else agent_id
+        )
+        for agent_id in _normalized_agent_order(config)
+    ]
     save_config(config)
 
-    return {"success": True, "agent_ids": config.agents.agent_order}
+    return {"success": True, "agent_ids": reorder_request.agent_ids}
 
 
 @router.patch(
@@ -304,6 +338,7 @@ async def reorder_agents(
 async def set_agent_pinned(
     agentId: str = PathParam(...),
     pinned: bool = Body(..., embed=True),
+    request: Request = None,
 ) -> dict:
     """Persist an agent's pinned state without changing enabled state."""
     config = load_config()
@@ -314,13 +349,20 @@ async def set_agent_pinned(
             detail=f"Agent '{agentId}' not found",
         )
 
+    agent_ref = config.agents.profiles[agentId]
+    principal = getattr(getattr(request, "state", None), "principal", None)
+    if (
+        principal is not None
+        and agent_ref.owner_user_id != principal.user_id
+    ):
+        raise HTTPException(status_code=404, detail="Agent not found")
+
     if agentId == "default" and not pinned:
         raise HTTPException(
             status_code=400,
             detail="Cannot unpin the default agent",
         )
 
-    agent_ref = config.agents.profiles[agentId]
     if agentId != "default":
         agent_ref.pinned = pinned
         config.agents.agent_order = _display_agent_order(config)
@@ -339,8 +381,23 @@ async def set_agent_pinned(
     summary="Get agent details",
     description="Get complete configuration for a specific agent",
 )
-async def get_agent(agentId: str = PathParam(...)) -> AgentProfileConfig:
+async def get_agent(
+    agentId: str = PathParam(...),
+    request: Request = None,
+) -> AgentProfileConfig:
     """Get agent configuration."""
+    config = load_config()
+    agent_ref = config.agents.profiles.get(agentId)
+    if agent_ref is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    principal = getattr(getattr(request, "state", None), "principal", None)
+    if (
+        principal is not None
+        and agent_ref.owner_user_id != principal.user_id
+    ):
+        raise HTTPException(status_code=404, detail="Agent not found")
+
     try:
         agent_config = load_agent_config(agentId)
         return agent_config
@@ -384,6 +441,11 @@ async def create_agent(
     (validated for URL-safe characters, length, reserved words, and
     uniqueness).  Otherwise a random short UUID is generated.
     """
+    # 所属用户 ID 必须从已验证 Token 对应的当前用户中取得，
+    # 不能相信前端请求体传来的用户 ID。未启用认证时保持旧的单机行为。
+    principal = getattr(getattr(http_request, "state", None), "principal", None)
+    current_user_id = principal.user_id if principal is not None else None
+
     config = load_config()
     existing_ids = set(config.agents.profiles.keys())
 
@@ -399,8 +461,17 @@ async def create_agent(
     else:
         new_id = _generate_unique_id(existing_ids)
 
+    if request.workspace_dir and current_user_id is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Custom workspace directories are unavailable when "
+                "user isolation is enabled."
+            ),
+        )
+
     workspace_dir = Path(
-        request.workspace_dir or f"{WORKING_DIR}/workspaces/{new_id}",
+        request.workspace_dir or WORKING_DIR / "workspaces" / new_id,
     ).expanduser()
     workspace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -450,6 +521,7 @@ async def create_agent(
     agent_ref = AgentProfileRef(
         id=new_id,
         workspace_dir=str(workspace_dir),
+        owner_user_id=current_user_id,
         enabled=True,
     )
 
@@ -487,6 +559,14 @@ async def update_agent(
             detail=f"Agent '{agentId}' not found",
         )
 
+    agent_ref = config.agents.profiles[agentId]
+    principal = getattr(getattr(request, "state", None), "principal", None)
+    if (
+        principal is not None
+        and agent_ref.owner_user_id != principal.user_id
+    ):
+        raise HTTPException(status_code=404, detail="Agent not found")
+
     existing_config = load_agent_config(agentId)
 
     update_data = agent_config.model_dump(exclude_unset=True)
@@ -518,6 +598,14 @@ async def delete_agent(
             status_code=404,
             detail=f"Agent '{agentId}' not found",
         )
+
+    agent_ref = config.agents.profiles[agentId]
+    principal = getattr(getattr(request, "state", None), "principal", None)
+    if (
+        principal is not None
+        and agent_ref.owner_user_id != principal.user_id
+    ):
+        raise HTTPException(status_code=404, detail="Agent not found")
 
     if agentId == "default":
         raise HTTPException(
@@ -559,13 +647,20 @@ async def toggle_agent_enabled(
             detail=f"Agent '{agentId}' not found",
         )
 
+    agent_ref = config.agents.profiles[agentId]
+    principal = getattr(getattr(request, "state", None), "principal", None)
+    if (
+        principal is not None
+        and agent_ref.owner_user_id != principal.user_id
+    ):
+        raise HTTPException(status_code=404, detail="Agent not found")
+
     if agentId == "default":
         raise HTTPException(
             status_code=400,
             detail="Cannot disable the default agent",
         )
 
-    agent_ref = config.agents.profiles[agentId]
     manager = _get_multi_agent_manager(request)
 
     if not enabled and manager.is_agent_startup_in_progress(agentId):

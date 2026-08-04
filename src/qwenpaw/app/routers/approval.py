@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 from ..approvals import get_approval_service
 from ..approvals.display import approval_display_fields
 from ...security.tool_guard.approval import ApprovalDecision, ApprovalScope
+from ...config import load_config
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,15 @@ async def post_approval_approve(
             status_code=404,
             detail=f"Approval request not found: {body.request_id[:16]}",
         )
+
+    principal = getattr(request.state, "principal", None)
+    if principal is not None:
+        agent_ref = load_config().agents.profiles.get(pending.owner_agent_id)
+        if (
+            agent_ref is None
+            or agent_ref.owner_user_id != principal.user_id
+        ):
+            raise HTTPException(status_code=404, detail="Approval request not found")
 
     if pending.root_session_id != body.session_id:
         logger.warning(
@@ -175,6 +185,15 @@ async def post_approval_deny(
             detail=f"Approval request not found: {body.request_id[:16]}",
         )
 
+    principal = getattr(request.state, "principal", None)
+    if principal is not None:
+        agent_ref = load_config().agents.profiles.get(pending.owner_agent_id)
+        if (
+            agent_ref is None
+            or agent_ref.owner_user_id != principal.user_id
+        ):
+            raise HTTPException(status_code=404, detail="Approval request not found")
+
     if pending.root_session_id != body.session_id:
         logger.warning(
             "Root session mismatch: request %s (root: %s) not in session %s",
@@ -236,9 +255,20 @@ async def get_approval_list(
         async with svc._lock:
             pending_list = list(svc._pending.values())
 
+    # 已登录用户只接收属于自己智能体的审批；不向其他账号暴露请求 ID。
+    principal = getattr(request.state, "principal", None)
+    config = load_config() if principal is not None else None
+
     # Serialize pending approvals
     result = []
     for pending in pending_list:
+        if principal is not None:
+            agent_ref = config.agents.profiles.get(pending.owner_agent_id)
+            if (
+                agent_ref is None
+                or agent_ref.owner_user_id != principal.user_id
+            ):
+                continue
         result.append(
             {
                 "request_id": pending.request_id,

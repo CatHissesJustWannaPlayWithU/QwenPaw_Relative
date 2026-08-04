@@ -20,6 +20,10 @@ from ..auth import (
     resolve_client_ip,
 )
 from ..rate_limiter import rate_limiter
+from ..user_provisioning import (
+    ensure_personal_agent,
+    migrate_legacy_agents_to_first_admin,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -117,6 +121,10 @@ async def login(request: Request, req: LoginRequest):
     rate_limiter.record_login_attempt(client_ip, req.username, success=True)
 
     user = get_user_by_username(req.username)
+    if user:
+        # 管理员创建的普通账号会在首次登录时获得独立工作区；
+        # 老用户已有归属时该函数只返回原 Agent，不会重复创建。
+        ensure_personal_agent(str(user["id"]), str(user["username"]))
     return LoginResponse(
         token=token,
         username=req.username,
@@ -146,6 +154,10 @@ async def register(req: RegisterRequest):
             detail="Username and password are required",
         )
 
+    # 首个注册用户需要接管启动时创建的旧单用户 Agent；后续用户则
+    # 在下面获得全新的个人工作区。这个判断必须在注册前完成。
+    first_registration = not has_registered_users()
+
     # 注册逻辑由认证模块处理，密码不会在路由层保存。
     token = register_user(
         req.username.strip(),
@@ -161,6 +173,10 @@ async def register(req: RegisterRequest):
         )
 
     user = get_user_by_username(req.username.strip())
+    if user:
+        if first_registration:
+            migrate_legacy_agents_to_first_admin()
+        ensure_personal_agent(str(user["id"]), str(user["username"]))
     return LoginResponse(
         token=token,
         username=req.username.strip(),

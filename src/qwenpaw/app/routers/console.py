@@ -51,6 +51,7 @@ class _BackgroundTask:
     finished_at: Optional[float] = None
     result: Optional[Dict[str, Any]] = None
     asyncio_task: Optional[asyncio.Task] = None
+    agent_id: str = ""
 
 
 _bg_tasks: Dict[str, _BackgroundTask] = {}
@@ -387,6 +388,7 @@ async def get_backend_debug_logs(
 
 @router.get("/push-messages")
 async def get_push_messages(
+    request: Request,
     session_id: str | None = Query(None, description="Optional session id"),
 ):
     """
@@ -404,13 +406,15 @@ async def get_push_messages(
     from ..console_push_store import get_recent, take
     from ..approvals import get_approval_service
 
+    workspace = await get_agent_for_request(request)
+
     # Get messages (session-specific or global)
     if session_id:
-        messages = await take(session_id)
+        messages = await take(session_id, agent_id=workspace.agent_id)
     else:
-        messages = await get_recent()
+        messages = await get_recent(agent_id=workspace.agent_id)
 
-    # Get ALL pending approvals (not filtered by session)
+    # 只取当前工作区的审批，不能把其他用户 Agent 的待审批动作推给前端。
     approval_svc = get_approval_service()
     # pylint: disable=protected-access
     async with approval_svc._lock:
@@ -436,6 +440,7 @@ async def get_push_messages(
             "timeout_seconds": p.timeout_seconds,
         }
         for p in all_pending
+        if p.owner_agent_id == workspace.agent_id
     ]
 
     return {"messages": messages, "pending_approvals": approvals_data}
@@ -443,6 +448,7 @@ async def get_push_messages(
 
 @router.get("/inbox/events")
 async def get_inbox_events(
+    request: Request,
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     source_type: str | None = Query(None),
@@ -452,34 +458,49 @@ async def get_inbox_events(
 ):
     from ..inbox_store import list_events
 
+    workspace = await get_agent_for_request(request)
+    if agent_id is not None and agent_id != workspace.agent_id:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
     events = await list_events(
         limit=limit,
         offset=offset,
         source_type=source_type,
         status=status,
-        agent_id=agent_id,
+        agent_id=workspace.agent_id,
         unread_only=unread_only,
     )
     return {"events": events}
 
 
 @router.post("/inbox/read")
-async def post_mark_inbox_read(payload: MarkInboxReadRequest):
+async def post_mark_inbox_read(
+    payload: MarkInboxReadRequest,
+    request: Request,
+):
     from ..inbox_store import mark_all_read, mark_read
 
+    workspace = await get_agent_for_request(request)
     if payload.all:
-        updated = await mark_all_read()
+        updated = await mark_all_read(agent_id=workspace.agent_id)
     else:
-        updated = await mark_read(payload.event_ids)
+        updated = await mark_read(
+            payload.event_ids,
+            agent_id=workspace.agent_id,
+        )
     return {"updated": updated}
 
 
 @router.delete("/inbox/events/{event_id}")
-async def delete_inbox_event(event_id: str):
+async def delete_inbox_event(event_id: str, request: Request):
     from ..inbox_store import delete_event
     from ..inbox_trace_store import delete_trace
 
-    deleted, run_id, run_id_still_referenced = await delete_event(event_id)
+    workspace = await get_agent_for_request(request)
+    deleted, run_id, run_id_still_referenced = await delete_event(
+        event_id,
+        agent_id=workspace.agent_id,
+    )
     if not deleted:
         raise HTTPException(status_code=404, detail="event not found")
     trace_deleted = False
@@ -493,9 +514,13 @@ async def delete_inbox_event(event_id: str):
 
 
 @router.get("/inbox/traces/{run_id}")
-async def get_inbox_trace(run_id: str):
+async def get_inbox_trace(run_id: str, request: Request):
+    from ..inbox_store import has_event_for_run_id
     from ..inbox_trace_store import get_trace
 
+    workspace = await get_agent_for_request(request)
+    if not await has_event_for_run_id(run_id, agent_id=workspace.agent_id):
+        raise HTTPException(status_code=404, detail="trace not found")
     trace = await get_trace(run_id)
     if trace is None:
         raise HTTPException(
@@ -557,6 +582,7 @@ async def post_console_chat_task(
     bg = _BackgroundTask(
         status="running",
         started_at=time.time(),
+        agent_id=workspace.agent_id,
     )
 
     async def _run() -> None:
@@ -623,7 +649,7 @@ async def post_console_chat_task(
     status_code=200,
     summary="Check background chat task status",
 )
-async def get_console_chat_task(task_id: str) -> dict:
+async def get_console_chat_task(task_id: str, request: Request) -> dict:
     """Return the current status of a background chat task."""
     async with _bg_lock:
         bg = _bg_tasks.get(task_id)
@@ -632,6 +658,9 @@ async def get_console_chat_task(task_id: str) -> dict:
             status_code=404,
             detail=f"Task not found: {task_id}",
         )
+    workspace = await get_agent_for_request(request)
+    if bg.agent_id != workspace.agent_id:
+        raise HTTPException(status_code=404, detail=f"Task not found: {task_id}")
     response: Dict[str, Any] = {"status": bg.status}
     if bg.started_at is not None:
         response["started_at"] = bg.started_at

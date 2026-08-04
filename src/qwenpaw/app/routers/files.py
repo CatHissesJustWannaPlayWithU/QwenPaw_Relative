@@ -4,10 +4,11 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from urllib.parse import unquote
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import FileResponse
 
 from qwenpaw.constant import WORKING_DIR
+from qwenpaw.config import load_config
 from qwenpaw.security.tool_guard.guardians.file_guardian import (
     FilePathToolGuardian,
     _normalize_path,
@@ -63,6 +64,7 @@ def _check_path(path: Path) -> str | None:
 )
 async def preview_file(
     filepath: str,
+    request: Request,
 ):
     """Preview file."""
     normalized = unquote(filepath)
@@ -80,6 +82,24 @@ async def preview_file(
     if not path.is_absolute():
         path = Path("/" + normalized)
     path = path.resolve()
+
+    # 文件预览没有经过 Agent 路由，因此必须在这里按工作区归属再次收口。
+    # 主体来自认证中间件，绝不能接受 URL 参数或前端传来的用户 ID。
+    principal = getattr(request.state, "principal", None)
+    if principal is not None:
+        config = load_config()
+        owned_workspaces = [
+            Path(agent_ref.workspace_dir).expanduser().resolve()
+            for agent_ref in config.agents.profiles.values()
+            if agent_ref.owner_user_id == principal.user_id
+        ]
+        if not any(
+            path == workspace_dir or path.is_relative_to(workspace_dir)
+            for workspace_dir in owned_workspaces
+        ):
+            # 使用 404 而不是 403，不向其他账号暴露文件路径是否真实存在。
+            raise HTTPException(status_code=404, detail="Not found")
+
     reason = _check_path(path)
     if reason:
         raise HTTPException(status_code=403, detail=reason)

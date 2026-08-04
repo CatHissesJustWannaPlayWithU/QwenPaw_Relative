@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 
 from qwenpaw.exceptions import AppBaseException
 from qwenpaw.app.agent_startup import AgentStartupStatus
+from qwenpaw.app.principal import Principal
 from qwenpaw.app.routers.agents import router as agents_router
 from qwenpaw.config.config import AgentProfileConfig, AgentProfileRef
 
@@ -28,6 +29,7 @@ def _ref(agent_id: str, *, enabled: bool = True) -> AgentProfileRef:
     return AgentProfileRef(
         id=agent_id,
         workspace_dir=f"/tmp/ws/{agent_id}",
+        owner_user_id="user_alice",
         enabled=enabled,
     )
 
@@ -48,6 +50,17 @@ def manager_mock():
 def app(manager_mock) -> FastAPI:
     application = FastAPI()
     application.state.multi_agent_manager = manager_mock
+
+    @application.middleware("http")
+    async def attach_principal(request, call_next):
+        """模拟认证中间件已将当前用户写入请求状态。"""
+        request.state.principal = Principal(
+            user_id="user_alice",
+            username="alice",
+            role="user",
+        )
+        return await call_next(request)
+
     application.include_router(agents_router, prefix="/api")
     return application
 
@@ -139,7 +152,7 @@ def test_list_agents_falls_back_to_id_when_load_fails(client, fake_config):
 # ---------------------------------------------------------------------------
 
 
-def test_get_agent_returns_config(client):
+def test_get_agent_returns_config(client, fake_config):
     cfg = AgentProfileConfig(
         id="bot",
         name="Bot",
@@ -147,9 +160,15 @@ def test_get_agent_returns_config(client):
         workspace_dir="/tmp/ws/bot",
     )
 
-    with patch(
-        "qwenpaw.app.routers.agents.load_agent_config",
-        return_value=cfg,
+    with (
+        patch(
+            "qwenpaw.app.routers.agents.load_config",
+            return_value=fake_config,
+        ),
+        patch(
+            "qwenpaw.app.routers.agents.load_agent_config",
+            return_value=cfg,
+        ),
     ):
         response = client.get("/api/agents/bot")
 
@@ -179,6 +198,33 @@ def test_get_agent_returns_404_for_app_base_exception(client):
         response = client.get("/api/agents/ghost")
 
     assert response.status_code == 404
+
+
+def test_management_endpoints_hide_other_users_agent(client, fake_config):
+    """跨账号直接猜测 Agent ID 也不能查看或操作资源。"""
+    fake_config.agents.profiles["bob"] = _ref("bob")
+    fake_config.agents.profiles["bob"].owner_user_id = "user_bob"
+    fake_config.agents.agent_order.append("bob")
+
+    with patch(
+        "qwenpaw.app.routers.agents.load_config",
+        return_value=fake_config,
+    ):
+        get_response = client.get("/api/agents/bob")
+        pin_response = client.patch(
+            "/api/agents/bob/pin",
+            json={"pinned": True},
+        )
+        delete_response = client.delete("/api/agents/bob")
+        toggle_response = client.patch(
+            "/api/agents/bob/toggle",
+            json={"enabled": False},
+        )
+
+    assert get_response.status_code == 404
+    assert pin_response.status_code == 404
+    assert delete_response.status_code == 404
+    assert toggle_response.status_code == 404
 
 
 # ---------------------------------------------------------------------------

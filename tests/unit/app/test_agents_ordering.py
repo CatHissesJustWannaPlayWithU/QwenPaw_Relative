@@ -12,6 +12,8 @@ from qwenpaw.config.config import (
     Config,
 )
 from qwenpaw.config.utils import load_config, save_config
+from qwenpaw.app.agent_startup import AgentStartupStatus
+from qwenpaw.app.principal import Principal
 from qwenpaw.app.routers import agents as agents_router
 
 
@@ -19,6 +21,7 @@ def _build_config(
     profile_ids: list[str],
     agent_order: list[str] | None = None,
     pinned_ids: set[str] | None = None,
+    owner_user_id: str | None = "user_alice",
 ) -> Config:
     """Build a minimal config with agent profiles in the given order."""
     config = Config()
@@ -26,6 +29,7 @@ def _build_config(
         agent_id: AgentProfileRef(
             id=agent_id,
             workspace_dir=f"/tmp/{agent_id}",
+            owner_user_id=owner_user_id,
             pinned=agent_id in (pinned_ids or set()),
         )
         for agent_id in profile_ids
@@ -40,6 +44,29 @@ def _agent_config(agent_id: str) -> AgentProfileConfig:
         name=agent_id.upper(),
         description=f"{agent_id} description",
         workspace_dir=f"/tmp/{agent_id}",
+    )
+
+
+def _authenticated_request(user_id: str = "user_alice"):
+    """构造已认证用户调用智能体接口所需的最小请求对象。"""
+    manager = SimpleNamespace(
+        get_agent_startup_status=lambda _agent_id, *, enabled: (
+            AgentStartupStatus.PENDING
+            if enabled
+            else AgentStartupStatus.DISABLED
+        ),
+    )
+    return SimpleNamespace(
+        state=SimpleNamespace(
+            principal=Principal(
+                user_id=user_id,
+                username="alice",
+                role="user",
+            ),
+        ),
+        app=SimpleNamespace(
+            state=SimpleNamespace(multi_agent_manager=manager),
+        ),
     )
 
 
@@ -71,7 +98,7 @@ async def test_list_agents_uses_persisted_order(monkeypatch):
         _agent_config,
     )
 
-    response = await agents_router.list_agents()
+    response = await agents_router.list_agents(_authenticated_request())
 
     assert [agent.id for agent in response.agents] == [
         "default",
@@ -95,7 +122,7 @@ async def test_list_agents_appends_missing_ids(monkeypatch):
         _agent_config,
     )
 
-    response = await agents_router.list_agents()
+    response = await agents_router.list_agents(_authenticated_request())
 
     assert [agent.id for agent in response.agents] == [
         "default",
@@ -122,7 +149,7 @@ async def test_list_agents_groups_default_and_pinned_without_reordering_peers(
         _agent_config,
     )
 
-    response = await agents_router.list_agents()
+    response = await agents_router.list_agents(_authenticated_request())
 
     assert [agent.id for agent in response.agents] == [
         "default",
@@ -139,6 +166,28 @@ async def test_list_agents_groups_default_and_pinned_without_reordering_peers(
 
 
 @pytest.mark.asyncio
+async def test_list_agents_hides_other_users_and_legacy_agents(monkeypatch):
+    """列表只返回当前登录用户拥有的智能体。"""
+    config = _build_config(
+        ["alice_agent", "bob_agent", "legacy_agent"],
+        agent_order=["alice_agent", "bob_agent", "legacy_agent"],
+    )
+    config.agents.profiles["bob_agent"].owner_user_id = "user_bob"
+    config.agents.profiles["legacy_agent"].owner_user_id = None
+
+    monkeypatch.setattr(agents_router, "load_config", lambda: config)
+    monkeypatch.setattr(
+        agents_router,
+        "load_agent_config",
+        _agent_config,
+    )
+
+    response = await agents_router.list_agents(_authenticated_request())
+
+    assert [agent.id for agent in response.agents] == ["alice_agent"]
+
+
+@pytest.mark.asyncio
 async def test_pin_agent_persists_without_changing_enabled(monkeypatch):
     """Pinning must not alter an agent's enabled state."""
     config = _build_config(["default", "disabled"])
@@ -152,7 +201,11 @@ async def test_pin_agent_persists_without_changing_enabled(monkeypatch):
         saved_configs.append,
     )
 
-    response = await agents_router.set_agent_pinned("disabled", True)
+    response = await agents_router.set_agent_pinned(
+        "disabled",
+        True,
+        request=_authenticated_request(),
+    )
 
     assert response["pinned"] is True
     assert config.agents.profiles["disabled"].pinned is True
@@ -167,7 +220,11 @@ async def test_default_agent_cannot_be_unpinned(monkeypatch):
     monkeypatch.setattr(agents_router, "load_config", lambda: config)
 
     with pytest.raises(HTTPException) as exc_info:
-        await agents_router.set_agent_pinned("default", False)
+        await agents_router.set_agent_pinned(
+            "default",
+            False,
+            request=_authenticated_request(),
+        )
 
     assert exc_info.value.status_code == 400
 
@@ -185,6 +242,7 @@ async def test_reorder_agents_rejects_incomplete_payload(monkeypatch):
     with pytest.raises(HTTPException) as exc_info:
         await agents_router.reorder_agents(
             agents_router.ReorderAgentsRequest(agent_ids=["alpha", "default"]),
+            request=_authenticated_request(),
         )
 
     assert exc_info.value.status_code == 400
@@ -213,6 +271,7 @@ async def test_reorder_agents_persists_valid_order(monkeypatch):
         agents_router.ReorderAgentsRequest(
             agent_ids=["default", "beta", "alpha"],
         ),
+        request=_authenticated_request(),
     )
 
     assert response["success"] is True
@@ -235,6 +294,7 @@ async def test_reorder_agents_rejects_non_display_order(monkeypatch):
             agents_router.ReorderAgentsRequest(
                 agent_ids=["default", "regular", "pinned"],
             ),
+            request=_authenticated_request(),
         )
 
     assert exc_info.value.status_code == 400
@@ -250,6 +310,7 @@ async def test_create_agent_appends_new_id_to_order(monkeypatch, tmp_path):
     )
 
     monkeypatch.setattr(agents_router, "load_config", lambda: config)
+    monkeypatch.setattr(agents_router, "WORKING_DIR", tmp_path)
     monkeypatch.setattr(agents_router, "save_config", lambda updated: None)
     monkeypatch.setattr(
         agents_router,
@@ -270,6 +331,13 @@ async def test_create_agent_appends_new_id_to_order(monkeypatch, tmp_path):
     scheduled_ids: list[str] = []
     manager.schedule_agent_startup = scheduled_ids.append
     http_request = SimpleNamespace(
+        state=SimpleNamespace(
+            principal=Principal(
+                user_id="user_alice",
+                username="alice",
+                role="user",
+            ),
+        ),
         app=SimpleNamespace(
             state=SimpleNamespace(multi_agent_manager=manager),
         ),
@@ -278,13 +346,49 @@ async def test_create_agent_appends_new_id_to_order(monkeypatch, tmp_path):
     await agents_router.create_agent(
         agents_router.CreateAgentRequest(
             name="Beta",
-            workspace_dir=str(tmp_path / "beta"),
         ),
         http_request=http_request,
     )
 
     assert config.agents.agent_order == ["alpha", "default", "beta"]
     assert scheduled_ids == ["beta"]
+    assert config.agents.profiles["beta"].owner_user_id == "user_alice"
+
+
+@pytest.mark.asyncio
+async def test_create_agent_rejects_custom_workspace_in_user_mode(monkeypatch):
+    """登录用户不能将新智能体指向任意服务端路径。"""
+    config = _build_config(["default"])
+    monkeypatch.setattr(agents_router, "load_config", lambda: config)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await agents_router.create_agent(
+            agents_router.CreateAgentRequest(
+                name="Unsafe",
+                workspace_dir="/tmp/someone-elses-workspace",
+            ),
+            http_request=_authenticated_request(),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "Custom workspace directories" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_update_agent_hides_other_users_agent(monkeypatch):
+    """即使知道 ID，当前用户也不能修改其他用户的智能体。"""
+    config = _build_config(["alice_agent", "bob_agent"])
+    config.agents.profiles["bob_agent"].owner_user_id = "user_bob"
+    monkeypatch.setattr(agents_router, "load_config", lambda: config)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await agents_router.update_agent(
+            "bob_agent",
+            _agent_config("bob_agent"),
+            request=_authenticated_request(),
+        )
+
+    assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio
@@ -312,7 +416,7 @@ async def test_delete_agent_removes_id_from_order(monkeypatch):
 
     await agents_router.delete_agent(
         "beta",
-        request=SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace())),
+        request=_authenticated_request(),
     )
 
     assert config.agents.agent_order == ["alpha", "default"]

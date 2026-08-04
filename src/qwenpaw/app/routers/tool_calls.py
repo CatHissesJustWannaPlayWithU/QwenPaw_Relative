@@ -10,6 +10,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from ...config import load_config
+
 router = APIRouter(prefix="/tool-calls", tags=["tool-calls"])
 
 
@@ -84,6 +86,20 @@ def _entry_to_info(entry: Any) -> ToolCallInfo:
 async def list_calls(session_id: str, request: Request) -> ListResponse:
     coordinator = _get_coordinator(request)
     entries = coordinator.list_entries(session_id=session_id)
+    principal = getattr(request.state, "principal", None)
+    if principal is not None:
+        config = load_config()
+        entries = [
+            entry
+            for entry in entries
+            if (
+                config.agents.profiles.get(entry.ctx.agent_id) is not None
+                and config.agents.profiles[
+                    entry.ctx.agent_id
+                ].owner_user_id
+                == principal.user_id
+            )
+        ]
     items = [_entry_to_info(e) for e in entries]
     return ListResponse(items=items, total=len(items))
 
@@ -98,6 +114,11 @@ async def get_call(
     entry = coordinator.get(tool_call_id)
     if entry is None or entry.ctx.session_id != session_id:
         raise HTTPException(404, "Tool call not found")
+    principal = getattr(request.state, "principal", None)
+    if principal is not None:
+        agent_ref = load_config().agents.profiles.get(entry.ctx.agent_id)
+        if agent_ref is None or agent_ref.owner_user_id != principal.user_id:
+            raise HTTPException(404, "Tool call not found")
     return _entry_to_info(entry)
 
 
@@ -111,6 +132,11 @@ async def offload_call(
     entry = coordinator.get(tool_call_id)
     if entry is None or entry.ctx.session_id != session_id:
         raise HTTPException(404, "Tool call not found")
+    principal = getattr(request.state, "principal", None)
+    if principal is not None:
+        agent_ref = load_config().agents.profiles.get(entry.ctx.agent_id)
+        if agent_ref is None or agent_ref.owner_user_id != principal.user_id:
+            raise HTTPException(404, "Tool call not found")
     ok = await coordinator.request_offload(tool_call_id)
     if not ok:
         raise HTTPException(409, "Cannot offload (not running)")
@@ -128,6 +154,11 @@ async def cancel_call(
     entry = coordinator.get(tool_call_id)
     if entry is None or entry.ctx.session_id != session_id:
         raise HTTPException(404, "Tool call not found")
+    principal = getattr(request.state, "principal", None)
+    if principal is not None:
+        agent_ref = load_config().agents.profiles.get(entry.ctx.agent_id)
+        if agent_ref is None or agent_ref.owner_user_id != principal.user_id:
+            raise HTTPException(404, "Tool call not found")
     force = body.force if body else False
     ok = await coordinator.cancel(tool_call_id, force=force)
     if not ok:
@@ -149,6 +180,11 @@ async def extend_deadline(
     entry = coordinator.get(tool_call_id)
     if entry is None or entry.ctx.session_id != session_id:
         raise HTTPException(404, "Tool call not found")
+    principal = getattr(request.state, "principal", None)
+    if principal is not None:
+        agent_ref = load_config().agents.profiles.get(entry.ctx.agent_id)
+        if agent_ref is None or agent_ref.owner_user_id != principal.user_id:
+            raise HTTPException(404, "Tool call not found")
     ok = await coordinator.extend_deadline(
         tool_call_id,
         seconds=body.seconds,
@@ -172,6 +208,11 @@ async def get_output(
     entry = coordinator.get(tool_call_id)
     if entry is None or entry.ctx.session_id != session_id:
         raise HTTPException(404, "Tool call not found")
+    principal = getattr(request.state, "principal", None)
+    if principal is not None:
+        agent_ref = load_config().agents.profiles.get(entry.ctx.agent_id)
+        if agent_ref is None or agent_ref.owner_user_id != principal.user_id:
+            raise HTTPException(404, "Tool call not found")
     content_blocks = []
     if entry.final_response and entry.final_response.content:
         for block in entry.final_response.content:
@@ -194,6 +235,11 @@ async def stream_output(
     entry = coordinator.get(tool_call_id)
     if entry is None or entry.ctx.session_id != session_id:
         raise HTTPException(404, "Tool call not found")
+    principal = getattr(request.state, "principal", None)
+    if principal is not None:
+        agent_ref = load_config().agents.profiles.get(entry.ctx.agent_id)
+        if agent_ref is None or agent_ref.owner_user_id != principal.user_id:
+            raise HTTPException(404, "Tool call not found")
 
     async def _generate():
         async for chunk in entry.stream.subscribe():
