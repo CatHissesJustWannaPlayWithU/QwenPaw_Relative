@@ -7,6 +7,8 @@ ARG UV_IMAGE=agentscope-registry.ap-southeast-1.cr.aliyuncs.com/agentscope/uv:la
 # -----------------------------------------------------------------------------
 FROM ${NODE_IMAGE} AS console-builder
 WORKDIR /app
+# QwenPaw 前端生产构建在 2GiB 服务器上接近 Node 默认堆上限；仅提高构建阶段上限。
+ENV NODE_OPTIONS=--max-old-space-size=1536
 COPY console /app/console
 RUN cd /app/console && npm ci --include=dev && npm run build
 
