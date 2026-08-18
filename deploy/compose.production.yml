@@ -1,0 +1,30 @@
+name: qwenpaw
+
+services:
+  qwenpaw:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: qwenpaw:production
+    container_name: qwenpaw
+    init: true
+    restart: unless-stopped
+    ports:
+      # Caddy will be the only future public entry point; do not expose 8088.
+      - "127.0.0.1:8088:8088"
+    environment:
+      QWENPAW_AUTH_ENABLED: "true"
+      QWENPAW_PORT: "8088"
+      QWENPAW_WORKING_DIR: "/app/working"
+      QWENPAW_SECRET_DIR: "/app/working.secret"
+      QWENPAW_BACKUP_DIR: "/app/working.backups"
+      # This small server only needs the web console channel.
+      QWENPAW_ENABLED_CHANNELS: "console"
+      QWENPAW_CUSTOM_AGENT_STARTUP_CONCURRENCY: "1"
+    volumes:
+      - /opt/qwenpaw/data/working:/app/working
+      - /opt/qwenpaw/data/secrets:/app/working.secret
+      - /opt/qwenpaw/data/backups:/app/working.backups
+      # Keep reviewed plugin source immutable from inside the container.
+      - ../plugins/tool/xhs-hotspot:/app/working/plugins/xhs-hotspot-tool:ro
+    stop_grace_period: 45s
