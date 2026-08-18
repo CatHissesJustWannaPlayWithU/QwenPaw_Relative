@@ -1,0 +1,125 @@
+{
+  "id": "xhs-hotspot-tool",
+  "name": "小红书热点采集",
+  "version": "0.2.0",
+  "type": "tool",
+  "description": "免费优先采集、校验并保存小红书热搜前十条快照，为后续定时任务和 Excel 周报提供可追溯数据。",
+  "author": "QwenPaw",
+  "entry": {
+    "backend": "xhs_hotspot.py"
+  },
+  "dependencies": [
+    "httpx>=0.27.0"
+  ],
+  "qwenpaw_version": {
+    "min": "1.0.0",
+    "max": "3.0.0"
+  },
+  "meta": {
+    "tools": [
+      {
+        "name": "collect_xhs_hotspots",
+        "description": "默认通过免费 UAPI 采集、校验并保存小红书热搜前十条；可选配置 AIDATA 作为付费备用来源。",
+        "icon": "📈",
+        "requires_config": false,
+        "config_fields": [
+          {
+            "name": "source",
+            "label": "数据源",
+            "type": "select",
+            "required": false,
+            "default": "uapi_free",
+            "options": ["uapi_free", "aidata_paid"],
+            "help": "默认 uapi_free，不需要 API Key；只有明确切换为 aidata_paid 才会发生付费调用。"
+          },
+          {
+            "name": "uapi_api_url",
+            "label": "UAPI 免费 API 地址",
+            "type": "text",
+            "required": false,
+            "placeholder": "https://uapis.cn/api/v1/misc/hotboard?type=xiaohongshu",
+            "help": "默认 UAPI 小红书榜单地址；仅在 source=uapi_free 时使用。"
+          },
+          {
+            "name": "aidata_api_key",
+            "label": "AIDATA API Key（可选）",
+            "type": "password",
+            "required": false,
+            "placeholder": "仅在 source=aidata_paid 时填写",
+            "help": "付费备用数据源的 Key；不会写入采集文件或日志。"
+          },
+          {
+            "name": "aidata_api_url",
+            "label": "AIDATA API 地址（可选）",
+            "type": "text",
+            "required": false,
+            "placeholder": "https://aidata.vip/api/v1/data/xiaohongshu/trending",
+            "help": "仅在 source=aidata_paid 时使用。"
+          },
+          {
+            "name": "timeout_seconds",
+            "label": "请求超时秒数",
+            "type": "number",
+            "required": false,
+            "placeholder": "20",
+            "min": 5,
+            "max": 120,
+            "help": "单次网络请求的最长等待时间。"
+          }
+        ]
+      },
+      {
+        "name": "list_xhs_hotspot_snapshots",
+        "description": "列出当前智能体已保存的小红书热点快照。",
+        "icon": "🗂️",
+        "requires_config": false
+      },
+      {
+        "name": "build_xhs_daily_collection_job",
+        "description": "生成默认关闭的每日小红书热点采集 Cron 任务 JSON；人工验证成功后再启用。",
+        "icon": "⏰",
+        "requires_config": false
+      },
+      {
+        "name": "save_xhs_report_preferences",
+        "description": "从用户确认过的对话记忆摘要中提炼兴趣偏好；只保存主题、权重和关键词。",
+        "icon": "🧭",
+        "requires_config": false
+      },
+      {
+        "name": "create_xhs_briefing",
+        "description": "面向普通用户生成小红书热点简报：自动复用已确认偏好，首次无偏好时生成综合版。",
+        "icon": "📰",
+        "requires_config": false
+      },
+      {
+        "name": "generate_xhs_personalized_report",
+        "description": "基于已保存的兴趣偏好和真实热点快照生成个性化简报。",
+        "icon": "📝",
+        "requires_config": false
+      },
+      {
+        "name": "list_xhs_personalized_reports",
+        "description": "列出当前智能体已经生成的个性化简报。",
+        "icon": "📚",
+        "requires_config": false
+      },
+      {
+        "name": "send_xhs_personalized_report_email",
+        "description": "人工确认报告与收件人后，通过加密 SMTP 凭据发送简报正文及 Excel 附件。",
+        "icon": "✉️",
+        "requires_config": true,
+        "config_fields": [
+          {
+            "name": "smtp_credential_ref",
+            "label": "SMTP 加密凭据引用",
+            "type": "text",
+            "required": true,
+            "placeholder": "xhs_report_smtp",
+            "help": "只填写 credentials.yaml 中的凭据引用，不要填写 SMTP 密码或授权码。"
+          }
+        ]
+      }
+    ]
+  }
+}

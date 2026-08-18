@@ -55,6 +55,13 @@ _TOOL_OUTPUT_MESSAGE_TYPES = {
     MessageType.MCP_TOOL_CALL_OUTPUT,
 }
 
+_TOOL_MESSAGE_TYPES = {
+    MessageType.FUNCTION_CALL,
+    MessageType.PLUGIN_CALL,
+    MessageType.MCP_TOOL_CALL,
+    *_TOOL_OUTPUT_MESSAGE_TYPES,
+}
+
 if TYPE_CHECKING:
     from qwenpaw.schemas import (
         AgentRequest,
@@ -910,12 +917,20 @@ class BaseChannel(ABC):
         process_iterator = None
         msg_id_to_stream_type: Dict[str, str] = {}
         streaming_buffers: Dict[str, str] = {}
+        # Console 的网页聊天直接消费 SSE。这里记录已隐藏消息的 ID，确保同一
+        # 条工具调用或思考过程后续产生的 content 事件也不会绕过过滤规则。
+        hidden_sse_message_ids: set[str] = set()
         try:
             process_iterator = self._process(request)
             async for event in process_iterator:
                 data = self._serialize_event_for_sse(event)
-
-                yield f"data: {data}\n\n"
+                if not self._should_hide_sse_event(
+                    event,
+                    hidden_sse_message_ids,
+                ):
+                    data = self._filter_sse_response_output(data)
+                    data = self._sanitize_xhs_technical_echo(data)
+                    yield f"data: {data}\n\n"
 
                 obj = getattr(event, "object", None)
                 status = getattr(event, "status", None)
@@ -1108,6 +1123,128 @@ class BaseChannel(ABC):
                     },
                     ensure_ascii=True,
                 )
+
+    @staticmethod
+    def _event_type_name(event: Any) -> str:
+        """返回 SSE 事件的统一消息类型字符串。"""
+        event_type = getattr(event, "type", None)
+        if hasattr(event_type, "value"):
+            event_type = event_type.value
+        type_name = str(event_type or "")
+        # 兼容旧式 Event 包装：外层 type 是 ``message.completed``，真实的
+        # reasoning / plugin_call 类型位于 event.message.type 中。
+        if type_name.startswith("message."):
+            message = getattr(event, "message", None)
+            message_type = getattr(message, "type", None)
+            if hasattr(message_type, "value"):
+                message_type = message_type.value
+            if message_type:
+                return str(message_type)
+        return type_name
+
+    def _should_hide_sse_event(
+        self,
+        event: Any,
+        hidden_message_ids: set[str],
+    ) -> bool:
+        """在 SSE 发送给网页前应用思考和工具消息过滤配置。
+
+        其他渠道走 ``MessageRenderer``，但 Console 网页直接接收原始事件；
+        因此过滤必须在这里再执行一次。审批请求不属于工具消息类型，仍会保留，
+        以免影响用户确认操作。
+        """
+        event_type = self._event_type_name(event)
+        object_type = str(getattr(event, "object", "") or "")
+
+        should_hide = (
+            self._filter_thinking and event_type == MessageType.REASONING.value
+        ) or (
+            self._filter_tool_messages and event_type in _TOOL_MESSAGE_TYPES
+        )
+        if object_type == "message" and should_hide:
+            message_id = getattr(event, "id", None)
+            if message_id:
+                hidden_message_ids.add(str(message_id))
+            return True
+
+        if object_type == "content":
+            message_id = getattr(event, "msg_id", None)
+            return bool(message_id and str(message_id) in hidden_message_ids)
+        return False
+
+    def _filter_sse_response_output(self, data: str) -> str:
+        """过滤 response.output 中已完成但不应展示给网页的内部消息。"""
+        if not (self._filter_thinking or self._filter_tool_messages):
+            return data
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError:
+            return data
+        output = payload.get("output") if isinstance(payload, dict) else None
+        if not isinstance(output, list):
+            return data
+
+        def is_visible(message: Any) -> bool:
+            if not isinstance(message, dict):
+                return True
+            message_type = str(message.get("type") or "")
+            if self._filter_thinking and message_type == MessageType.REASONING.value:
+                return False
+            return not (
+                self._filter_tool_messages
+                and message_type in _TOOL_MESSAGE_TYPES
+            )
+
+        payload["output"] = [message for message in output if is_visible(message)]
+        return json.dumps(payload, ensure_ascii=False, default=str)
+
+    def _sanitize_xhs_technical_echo(self, data: str) -> str:
+        """将模型误抄的小红书简报工具回执改为面向普通用户的结果。
+
+        工具调用本身由 Console 的专用卡片展示下载入口和发送状态；有些模型仍会
+        在后续 assistant 文本中逐字复述 ``ok: true``、报告 ID 与本地路径。这里
+        只处理以该类机器回执开头、且包含 ``xhs-report-`` 的文本，不影响用户主动
+        询问的技术说明或普通对话。
+        """
+        if self.channel != "console" or not isinstance(data, str):
+            return data
+        try:
+            payload = json.loads(data)
+        except json.JSONDecodeError:
+            return data
+
+        def replace_text(value: Any) -> Any:
+            if isinstance(value, list):
+                return [replace_text(item) for item in value]
+            if not isinstance(value, dict):
+                return value
+
+            result = {
+                key: replace_text(item)
+                for key, item in value.items()
+            }
+            text = result.get("text")
+            if not isinstance(text, str):
+                return result
+
+            normalized = " ".join(text.split())
+            lowered = normalized.lower()
+            starts_with_machine_result = (
+                lowered.startswith("ok: true")
+                or lowered.startswith('{"ok": true')
+            )
+            is_machine_echo = (
+                starts_with_machine_result and "xhs-report-" in lowered
+            )
+            if not is_machine_echo:
+                return result
+            if "receipt_path" in lowered or "sent_at:" in lowered:
+                result["text"] = "简报已发送至已脱敏的邮箱地址。"
+            else:
+                result["text"] = "简报已生成，可下载 Excel 文件。"
+            return result
+
+        return json.dumps(replace_text(payload), ensure_ascii=False, default=str)
 
     @classmethod
     def from_env(

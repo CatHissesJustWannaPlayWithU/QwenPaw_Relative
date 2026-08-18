@@ -95,6 +95,40 @@ def test_cron_job_spec_agent_syncs_request_with_target():
     assert spec.request.session_id == "console:alice"
 
 
+def test_cron_job_spec_tool_requires_a_tool_request():
+    with pytest.raises(ValidationError, match="tool is missing"):
+        CronJobSpec(
+            name="Missing tool",
+            schedule=ScheduleSpec(type="cron", cron="0 9 * * mon"),
+            task_type="tool",
+            dispatch=DispatchSpec(
+                target=DispatchTarget(user_id="u1", session_id="console:u1"),
+            ),
+        )
+
+
+def test_cron_job_spec_tool_accepts_fixed_arguments():
+    spec = CronJobSpec.model_validate(
+        {
+            "name": "Collect hotspots",
+            "schedule": {"type": "cron", "cron": "0 9 * * *"},
+            "task_type": "tool",
+            "tool": {
+                "name": "collect_xhs_hotspots",
+                "arguments": {"limit": 10, "allow_paid_source": False},
+            },
+            "dispatch": {
+                "target": {"user_id": "u1", "session_id": "console:u1"},
+                "silent": True,
+            },
+        },
+    )
+
+    assert spec.tool is not None
+    assert spec.tool.arguments["limit"] == 10
+    assert spec.request is None
+
+
 def test_cron_job_spec_text_rejects_empty_text():
     with pytest.raises(ValidationError, match="text is empty"):
         CronJobSpec(
@@ -128,7 +162,7 @@ def test_cron_job_spec_agent_accepts_silent_delivery():
 def test_cron_job_spec_text_rejects_silent_delivery():
     with pytest.raises(
         ValidationError,
-        match="silent delivery is only supported for agent tasks",
+        match="silent delivery is only supported for agent or tool tasks",
     ):
         CronJobSpec(
             name="Silent text",

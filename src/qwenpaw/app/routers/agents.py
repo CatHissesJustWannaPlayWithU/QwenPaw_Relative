@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Multi-agent management API.
+"""多智能体管理 API。
 
-Provides RESTful API for managing multiple agent instances.
+提供管理多个智能体实例的 RESTful API。
 """
 
 import json
@@ -40,7 +40,7 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 
 
 class AgentSummary(BaseModel):
-    """Agent summary information."""
+    """智能体摘要信息。"""
 
     id: str
     name: str
@@ -53,23 +53,22 @@ class AgentSummary(BaseModel):
 
 
 class AgentListResponse(BaseModel):
-    """Response for listing agents."""
+    """智能体列表响应。"""
 
     agents: list[AgentSummary]
 
 
 class ReorderAgentsRequest(BaseModel):
-    """Request model for persisting agent order."""
+    """保存智能体排序的请求模型。"""
 
     agent_ids: list[str]
 
 
 class CreateAgentRequest(BaseModel):
-    """Request model for creating a new agent.
+    """创建新智能体的请求模型。
 
-    The ``id`` field is optional.  When provided the server uses it as
-    the agent identifier (after sanitization); when omitted a random
-    short UUID is generated automatically.
+    ``id`` 字段可选。提供时，服务端会在清理后将其作为智能体标识；
+    未提供时，服务端会自动生成一个随机的短 UUID。
     """
 
     id: str | None = None
@@ -83,7 +82,7 @@ class CreateAgentRequest(BaseModel):
     @field_validator("id", mode="before")
     @classmethod
     def sanitize_id(cls, value: str | None) -> str | None:
-        """Strip whitespace from the custom ID."""
+        """去除自定义 ID 首尾的空白字符。"""
         if value is None:
             return None
         if isinstance(value, str):
@@ -94,7 +93,7 @@ class CreateAgentRequest(BaseModel):
     @field_validator("workspace_dir", mode="before")
     @classmethod
     def strip_workspace_dir(cls, value: str | None) -> str | None:
-        """Strip accidental whitespace"""
+        """去除工作区路径中误输入的空白字符。"""
         if value is None:
             return None
         if isinstance(value, str):
@@ -104,7 +103,7 @@ class CreateAgentRequest(BaseModel):
 
 
 def _get_multi_agent_manager(request: Request) -> MultiAgentManager:
-    """Get MultiAgentManager from app state."""
+    """从应用状态中获取多智能体管理器。"""
     if not hasattr(request.app.state, "multi_agent_manager"):
         raise HTTPException(
             status_code=500,
@@ -114,7 +113,7 @@ def _get_multi_agent_manager(request: Request) -> MultiAgentManager:
 
 
 def _normalized_agent_order(config) -> list[str]:
-    """Return a deduplicated agent order covering every configured agent."""
+    """返回去重后覆盖全部已配置智能体的排序列表。"""
     profile_ids = list(config.agents.profiles.keys())
     ordered_ids: list[str] = []
 
@@ -130,7 +129,7 @@ def _normalized_agent_order(config) -> list[str]:
 
 
 def _group_agent_order(config, ordered_ids: list[str]) -> list[str]:
-    """Group a complete order by default, pinned, then regular."""
+    """将完整排序按默认、置顶、普通智能体分组。"""
     pinned_ids = [
         agent_id
         for agent_id in ordered_ids
@@ -147,17 +146,17 @@ def _group_agent_order(config, ordered_ids: list[str]) -> list[str]:
 
 
 def _display_agent_order(config) -> list[str]:
-    """Return stored order grouped by default, pinned, then regular."""
+    """返回按默认、置顶、普通智能体分组后的显示顺序。"""
     return _group_agent_order(config, _normalized_agent_order(config))
 
 
 def _is_valid_display_order(config, agent_ids: list[str]) -> bool:
-    """Return whether an order respects default and pinned grouping."""
+    """判断排序是否符合默认智能体和置顶智能体的分组规则。"""
     return _group_agent_order(config, agent_ids) == agent_ids
 
 
 def _read_profile_description(workspace_dir: str) -> str:
-    """Read description from PROFILE.md if exists."""
+    """存在 PROFILE.md 时，从中读取智能体描述。"""
     try:
         profile_path = Path(workspace_dir) / "PROFILE.md"
         if not profile_path.exists():
@@ -191,7 +190,7 @@ def _read_profile_description(workspace_dir: str) -> str:
     description="Get list of all configured agents",
 )
 async def list_agents(request: Request) -> AgentListResponse:
-    """List all configured agents."""
+    """列出全部已配置智能体。"""
     # 登录模式下身份来自认证中间件验证后的 Token，而不是前端参数。
     # 未启用认证的单机部署没有 principal，因此保持原先可见全部智能体的行为。
     principal = getattr(request.state, "principal", None)
@@ -279,7 +278,7 @@ async def reorder_agents(
     reorder_request: ReorderAgentsRequest = Body(...),
     request: Request = None,
 ) -> dict:
-    """Persist the full ordered list of agent IDs."""
+    """保存完整的智能体 ID 排序列表。"""
     config = load_config()
     principal = getattr(getattr(request, "state", None), "principal", None)
     current_user_id = principal.user_id if principal is not None else None
@@ -340,7 +339,7 @@ async def set_agent_pinned(
     pinned: bool = Body(..., embed=True),
     request: Request = None,
 ) -> dict:
-    """Persist an agent's pinned state without changing enabled state."""
+    """保存智能体的置顶状态，不改变启用状态。"""
     config = load_config()
 
     if agentId not in config.agents.profiles:
@@ -385,7 +384,7 @@ async def get_agent(
     agentId: str = PathParam(...),
     request: Request = None,
 ) -> AgentProfileConfig:
-    """Get agent configuration."""
+    """获取指定智能体的完整配置。"""
     config = load_config()
     agent_ref = config.agents.profiles.get(agentId)
     if agent_ref is None:
@@ -408,10 +407,10 @@ async def get_agent(
 
 
 def _generate_unique_id(existing_ids: set[str]) -> str:
-    """Generate a unique random short agent ID.
+    """生成不与已有 ID 重复的随机短智能体 ID。
 
-    Raises:
-        HTTPException: If a unique ID could not be generated.
+    抛出：
+        HTTPException：连续尝试后仍无法生成唯一 ID 时抛出。
     """
     max_attempts = 10
     for _ in range(max_attempts):
@@ -435,11 +434,10 @@ async def create_agent(
     request: CreateAgentRequest = Body(...),
     http_request: Request = None,
 ) -> AgentProfileRef:
-    """Create a new agent.
+    """创建新智能体。
 
-    When ``request.id`` is provided, it is used as the agent identifier
-    (validated for URL-safe characters, length, reserved words, and
-    uniqueness).  Otherwise a random short UUID is generated.
+    提供 ``request.id`` 时，将其作为智能体标识，并校验 URL 安全字符、
+    长度、保留字和唯一性；未提供时生成随机短 UUID。
     """
     # 所属用户 ID 必须从已验证 Token 对应的当前用户中取得，
     # 不能相信前端请求体传来的用户 ID。未启用认证时保持旧的单机行为。
@@ -550,7 +548,7 @@ async def update_agent(
     agent_config: AgentProfileConfig = Body(...),
     request: Request = None,
 ) -> AgentProfileConfig:
-    """Update agent configuration."""
+    """更新智能体配置。"""
     config = load_config()
 
     if agentId not in config.agents.profiles:
@@ -590,7 +588,7 @@ async def delete_agent(
     agentId: str = PathParam(...),
     request: Request = None,
 ) -> dict:
-    """Delete an agent."""
+    """删除智能体。"""
     config = load_config()
 
     if agentId not in config.agents.profiles:
@@ -638,7 +636,7 @@ async def toggle_agent_enabled(
     enabled: bool = Body(..., embed=True),
     request: Request = None,
 ) -> dict:
-    """Toggle agent enabled state."""
+    """切换智能体的启用状态。"""
     config = load_config()
 
     if agentId not in config.agents.profiles:
@@ -694,7 +692,7 @@ def _apply_workspace_md_templates(
     *,
     md_template_id: str | None,
 ) -> None:
-    """Copy common and template-specific markdown files for a workspace."""
+    """为工作区复制通用和模板专用的 Markdown 文件。"""
     copy_workspace_md_files(
         language,
         workspace_dir,
@@ -703,7 +701,7 @@ def _apply_workspace_md_templates(
 
 
 def _ensure_heartbeat_file(workspace_dir: Path, language: str) -> None:
-    """Create the default HEARTBEAT.md if it is missing."""
+    """缺少 HEARTBEAT.md 时创建默认文件。"""
     heartbeat_file = workspace_dir / "HEARTBEAT.md"
     if heartbeat_file.exists():
         return
@@ -740,7 +738,7 @@ def _install_initial_skills(
     workspace_dir: Path,
     skill_names: list[str] | None,
 ) -> None:
-    """Install requested initial skills from the skill pool."""
+    """从技能池安装请求指定的初始技能。"""
     if not skill_names:
         return
 
@@ -775,7 +773,7 @@ def _initialize_agent_workspace(
     md_template_id: str | None = None,
     language: str | None = None,
 ) -> None:
-    """Initialize agent workspace with only explicitly requested skills."""
+    """初始化智能体工作区，仅安装明确请求的技能。"""
     from ...config import load_config as load_global_config
 
     (workspace_dir / "sessions").mkdir(exist_ok=True)

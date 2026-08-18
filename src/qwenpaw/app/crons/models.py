@@ -151,7 +151,7 @@ class DispatchSpec(BaseModel):
     silent: bool = Field(
         default=False,
         description=(
-            "Run an agent task without delivering its events to the channel."
+            "Run an agent or tool task without delivering its events to the channel."
         ),
     )
     meta: Dict[str, Any] = Field(default_factory=dict)
@@ -193,7 +193,14 @@ class CronJobRequest(BaseModel):
     user_id: Optional[str] = None
 
 
-TaskType = Literal["text", "agent"]
+class CronToolRequest(BaseModel):
+    """直接调用定时工具时使用的工具名称与固定参数。"""
+
+    name: str = Field(min_length=1)
+    arguments: Dict[str, Any] = Field(default_factory=dict)
+
+
+TaskType = Literal["text", "agent", "tool"]
 
 
 class CronJobSpec(BaseModel):
@@ -205,6 +212,7 @@ class CronJobSpec(BaseModel):
     task_type: TaskType = "agent"
     text: Optional[str] = None
     request: Optional[CronJobRequest] = None
+    tool: Optional[CronToolRequest] = None
     dispatch: DispatchSpec
     save_result_to_inbox: Optional[bool] = None
 
@@ -216,11 +224,8 @@ class CronJobSpec(BaseModel):
         if self.task_type == "text":
             if not (self.text and self.text.strip()):
                 raise ValueError("task_type is text but text is empty")
-            if self.dispatch.silent:
-                raise ValueError(
-                    "silent delivery is only supported for agent tasks",
-                )
             self.request = None
+            self.tool = None
         elif self.task_type == "agent":
             if self.request is None:
                 raise ValueError("task_type is agent but request is missing")
@@ -231,6 +236,18 @@ class CronJobSpec(BaseModel):
                     "user_id": target.user_id,
                     "session_id": target.session_id,
                 },
+            )
+            self.tool = None
+        elif self.tool is None:
+            raise ValueError("task_type is tool but tool is missing")
+        else:
+            # 固定工具任务不经过大模型，因此不能带入对话请求或文本内容。
+            self.request = None
+            self.text = None
+
+        if self.dispatch.silent and self.task_type == "text":
+            raise ValueError(
+                "silent delivery is only supported for agent or tool tasks",
             )
         if self.save_result_to_inbox is None:
             # Product rule:

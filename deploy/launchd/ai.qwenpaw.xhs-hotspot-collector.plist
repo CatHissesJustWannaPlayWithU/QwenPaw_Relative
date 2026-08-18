@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>ai.qwenpaw.xhs-hotspot-collector</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/xinyijiang/QwenPaw/venv/bin/qwenpaw</string>
+    <string>app</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/xinyijiang/QwenPaw</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>/Users/xinyijiang/.qwenpaw/logs/launchd-qwenpaw.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/xinyijiang/.qwenpaw/logs/launchd-qwenpaw.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/xinyijiang</string>
+    <key>PATH</key>
+    <string>/Users/xinyijiang/QwenPaw/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>

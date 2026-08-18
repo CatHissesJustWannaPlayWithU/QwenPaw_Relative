@@ -39,6 +39,7 @@ export { default as DelegateExternalAgentCard } from "./DelegateExternalAgentCar
 export { default as MaterializeSkillCard } from "./MaterializeSkillCard";
 export { default as ShellCard } from "./ShellCard";
 export { default as GenericToolCard } from "./GenericToolCard";
+export { default as XhsHotspotToolCard } from "./XhsHotspotToolCard";
 
 // ── Re-import for registry ────────────────────────────────────────────
 import ReadFileCard from "./ReadFileCard";
@@ -63,6 +64,7 @@ import CheckAgentTaskCard from "./CheckAgentTaskCard";
 import DelegateExternalAgentCard from "./DelegateExternalAgentCard";
 import MaterializeSkillCard from "./MaterializeSkillCard";
 import ShellCard from "./ShellCard";
+import XhsHotspotToolCard from "./XhsHotspotToolCard";
 
 // ── Common props type ─────────────────────────────────────────────────
 
@@ -131,4 +133,14 @@ export const BUILTIN_CARD_REGISTRY: Record<string, BuiltinCardComponent> = {
   bash: ShellCard,
   terminal: ShellCard,
   run_command: ShellCard,
+
+  // 小红书热点采集与简报
+  collect_xhs_hotspots: XhsHotspotToolCard,
+  list_xhs_hotspot_snapshots: XhsHotspotToolCard,
+  build_xhs_daily_collection_job: XhsHotspotToolCard,
+  save_xhs_report_preferences: XhsHotspotToolCard,
+  generate_xhs_personalized_report: XhsHotspotToolCard,
+  create_xhs_briefing: XhsHotspotToolCard,
+  list_xhs_personalized_reports: XhsHotspotToolCard,
+  send_xhs_personalized_report_email: XhsHotspotToolCard,
 };

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import uuid
 from typing import Any, Dict
@@ -30,6 +31,8 @@ class CronExecutor:
         - task_type text: send fixed text to channel
         - task_type agent: ask agent with prompt, send reply to channel (
             stream_query + send_event)
+        - task_type tool: invoke one explicitly Cron-safe tool with fixed
+            arguments, without spending a model call
         - silent agent task: consume the full agent stream without channel
             delivery, while preserving session and trace state
         """
@@ -37,6 +40,8 @@ class CronExecutor:
         target_session_id = job.dispatch.target.session_id
         target_channel = job.dispatch.channel
         dispatch_meta: Dict[str, Any] = dict(job.dispatch.meta or {})
+        if job.task_type == "tool":
+            return await self._execute_tool(job)
         if job.task_type == "agent":
             # Agent cron replies still print to the console channel, but
             # should not raise frontend push bubbles (Inbox remains opt-in).
@@ -275,3 +280,66 @@ class CronExecutor:
                         job.id,
                         exc_info=True,
                     )
+
+    async def _execute_tool(self, job: CronJobSpec) -> dict[str, Any]:
+        """在当前智能体工作区中执行被明确允许的固定工具调用，只允许已注册、cron_safe=True、且在专属智能体中启用的工具执行"""
+        assert job.tool is not None
+        tool_name = job.tool.name
+        tool_registry = getattr(
+            getattr(self._workspace, "plugins", None),
+            "tool_registry",
+            None,
+        )
+        descriptor = tool_registry.get(tool_name) if tool_registry else None
+        if descriptor is None:
+            raise ValueError(f"Cron tool '{tool_name}' is not registered")
+        if not descriptor.metadata.get("cron_safe", False):
+            raise ValueError(
+                f"Cron tool '{tool_name}' is not explicitly marked cron_safe",
+            )
+        fixed_arguments = descriptor.metadata.get("cron_fixed_arguments")
+        if fixed_arguments and job.tool.arguments != fixed_arguments:
+            raise ValueError(
+                f"Cron tool '{tool_name}' arguments do not match its fixed policy",
+            )
+
+        builtin_tools = getattr(
+            getattr(getattr(self._workspace, "config", None), "tools", None),
+            "builtin_tools",
+            {},
+        )
+        tool_config = builtin_tools.get(tool_name)
+        if tool_config is None or not getattr(tool_config, "enabled", False):
+            raise ValueError(
+                f"Cron tool '{tool_name}' is not enabled for this agent",
+            )
+
+        # 直接工具任务不会经过请求生命周期钩子，需在此补齐隔离上下文。
+        from ...config.context import set_current_workspace_dir
+        from ..agent_context import set_current_agent_id, set_current_user_id
+
+        set_current_workspace_dir(self._workspace.workspace_dir)
+        set_current_agent_id(self._workspace.agent_id)
+        set_current_user_id(job.dispatch.target.user_id)
+        logger.info(
+            "cron tool: job_id=%s tool=%s argument_keys=%s",
+            job.id,
+            tool_name,
+            sorted(job.tool.arguments.keys()),
+        )
+
+        result = descriptor.func(**job.tool.arguments) #字典解包，执行collect_xhs_hotspots(limit=10, force_refresh=True, allow_paid_source=False)
+        if inspect.isawaitable(result):
+            result = await asyncio.wait_for(
+                result,
+                timeout=job.runtime.timeout_seconds,
+            )
+        if isinstance(result, dict) and result.get("ok") is False:
+            raise RuntimeError(str(result.get("error") or "Cron tool failed"))
+
+        return {
+            "task_type": "tool",
+            "tool_name": tool_name,
+            "delivery_status": "suppressed" if job.dispatch.silent else "success",
+            "delivery_error": None,
+        }

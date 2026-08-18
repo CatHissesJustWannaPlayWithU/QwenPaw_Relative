@@ -191,7 +191,7 @@ async def delete_event(
 
 
 async def has_event_for_run_id(run_id: str, *, agent_id: str) -> bool:
-    """Return whether an agent-owned inbox event references *run_id*."""
+    """判断指定智能体的收件箱事件是否引用了 ``run_id``。"""
     async with _LOCK:
         events = _load_events()
     return any(

@@ -752,6 +752,8 @@ class CronManager(ManagerBase):
                     elif job.save_result_to_inbox:
                         if job.task_type == "text":
                             body = (job.text or "").strip()
+                        elif job.task_type == "tool":
+                            body = "Tool cron task finished successfully."
                         else:
                             body = "Agent cron task finished successfully."
                         try:
@@ -768,6 +770,7 @@ class CronManager(ManagerBase):
                                     "job_id": job.id,
                                     "job_name": job.name,
                                     "task_type": job.task_type,
+                                    "tool_name": execution_result.get("tool_name"),
                                     "trigger": trigger,
                                     "run_id": execution_result.get("run_id"),
                                     "save_result_to_inbox": (

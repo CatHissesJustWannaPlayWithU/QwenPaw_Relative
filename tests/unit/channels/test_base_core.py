@@ -18,6 +18,7 @@ Corresponding Tier Strategy:
 # pylint: disable=reimported,broad-exception-raised,using-constant-test
 from __future__ import annotations
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -951,6 +952,98 @@ class TestStreamWithTracker:
 
                     assert len(events) == 1
                     assert "data:" in events[0]
+
+    async def test_sse_filter_hides_internal_events_and_completed_output(
+        self,
+        base_channel,
+    ):
+        """Console SSE 必须执行与其他渠道一致的思考和工具消息过滤。"""
+        from qwenpaw.schemas import (
+            AgentResponse,
+            ContentType,
+            DataContent,
+            Message,
+            MessageType,
+            Role,
+            TextContent,
+        )
+
+        base_channel._filter_thinking = True
+        base_channel._filter_tool_messages = True
+        hidden_ids: set[str] = set()
+        reasoning = Message(
+            id="reasoning-1",
+            type=MessageType.REASONING,
+            role=Role.ASSISTANT,
+            object="message",
+        )
+        tool_call = Message(
+            id="tool-1",
+            type=MessageType.PLUGIN_CALL,
+            role=Role.ASSISTANT,
+            object="message",
+        )
+        tool_content = DataContent(
+            type=ContentType.DATA,
+            data={"name": "collect_xhs_hotspots"},
+            msg_id="tool-1",
+        )
+
+        assert base_channel._should_hide_sse_event(reasoning, hidden_ids)
+        assert base_channel._should_hide_sse_event(tool_call, hidden_ids)
+        assert base_channel._should_hide_sse_event(tool_content, hidden_ids)
+
+        response = AgentResponse(
+            object="response",
+            output=[
+                reasoning,
+                tool_call,
+                Message(
+                    type=MessageType.MESSAGE,
+                    role=Role.ASSISTANT,
+                    content=[TextContent(type=ContentType.TEXT, text="简报已生成")],
+                ),
+            ],
+        )
+        filtered = json.loads(
+            base_channel._filter_sse_response_output(
+                base_channel._serialize_event_for_sse(response),
+            )
+        )
+
+        assert [message["type"] for message in filtered["output"]] == [
+            MessageType.MESSAGE.value,
+        ]
+
+    async def test_sse_sanitizes_xhs_technical_echo_for_console(
+        self,
+        base_channel,
+    ):
+        """模型误抄简报回执时，Console 只展示普通用户能理解的结果。"""
+        payload = {
+            "object": "message",
+            "message": {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "ok: true report_id: xhs-report-20260818 "
+                            "sent_at: 2026-08-18 receipt_path: /private/receipt.json"
+                        ),
+                    },
+                ],
+            },
+        }
+
+        sanitized = json.loads(
+            base_channel._sanitize_xhs_technical_echo(
+                json.dumps(payload, ensure_ascii=False),
+            )
+        )
+
+        assert sanitized["message"]["content"][0]["text"] == (
+            "简报已发送至已脱敏的邮箱地址。"
+        )
 
     async def test_stream_with_tracker_handles_exception(self, base_channel):
         """_stream_with_tracker should handle exceptions gracefully."""

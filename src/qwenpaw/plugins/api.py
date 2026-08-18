@@ -57,6 +57,9 @@ def _bridge_to_runtime(
     enabled: bool,
     description: str,
     registry,
+    *,
+    cron_safe: bool = False,
+    cron_fixed_arguments: Dict[str, Any] | None = None,
 ) -> None:
     """Attach ToolDescriptor and inject into runtime ToolRegistries."""
     import inspect
@@ -72,6 +75,10 @@ def _bridge_to_runtime(
             enabled_by_default=enabled,
             async_execution=is_async,
             description=description,
+            metadata={
+                "cron_safe": cron_safe,
+                "cron_fixed_arguments": dict(cron_fixed_arguments or {}),
+            },
         )
         # pylint: disable-next=protected-access
         tool_func._tool_descriptor = desc  # type: ignore[attr-defined]
@@ -618,6 +625,8 @@ class PluginApi:  # pylint: disable=too-many-public-methods
         description: str = "",
         icon: str = "🔧",
         enabled: bool = False,
+        cron_safe: bool = False,
+        cron_fixed_arguments: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Register a tool function into the Agent's toolkit.
 
@@ -643,6 +652,10 @@ class PluginApi:  # pylint: disable=too-many-public-methods
             enabled: Whether the tool is enabled by default. The
                 recommended value is False so the user explicitly
                 enables the tool. Default: False.
+            cron_safe: Whether an enabled Cron ``tool`` task may invoke this
+                fixed tool without a model decision. Default: False.
+            cron_fixed_arguments: Exact arguments required when the tool is
+                started by Cron. ``None`` allows any function-valid args.
 
         Example:
             >>> from .tool import my_tool_func
@@ -673,6 +686,8 @@ class PluginApi:  # pylint: disable=too-many-public-methods
                     enabled,
                     description,
                     self._registry,
+                    cron_safe=cron_safe,
+                    cron_fixed_arguments=cron_fixed_arguments,
                 )
                 _write_tool_config(
                     tool_name,

@@ -25,6 +25,8 @@ export interface ToolCardShellProps {
   inlineResult?: string | null;
   /** Optional badge elements (line counts, diff counts). */
   badges?: React.ReactNode;
+  /** 是否默认展开卡片内容，适用于用户需要立即点击的结果。 */
+  defaultOpen?: boolean;
   /** Expandable body content. */
   children?: React.ReactNode;
 }
@@ -36,6 +38,7 @@ const ToolCardShell: React.FC<ToolCardShellProps> = ({
   title,
   inlineResult,
   badges,
+  defaultOpen = false,
   children,
 }) => {
   const { t } = useTranslation();
@@ -44,6 +47,7 @@ const ToolCardShell: React.FC<ToolCardShellProps> = ({
 
   return (
     <details
+      open={defaultOpen}
       className={`${styles.toolCallCompact} ${
         isLoading ? styles.toolCallCompactLoading : ""
       } ${isError ? styles.toolCallCompactError : ""}`}
