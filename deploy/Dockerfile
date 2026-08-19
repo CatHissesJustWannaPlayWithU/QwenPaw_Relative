@@ -7,7 +7,11 @@ ARG UV_IMAGE=agentscope-registry.ap-southeast-1.cr.aliyuncs.com/agentscope/uv:la
 FROM ${UV_IMAGE} AS uv-src
 
 # -----------------------------------------------------------------------------
-# Stage 2: runtime image with Python, Chromium, and app.
+# 阶段 2：轻量级生产运行环境。
+#
+# QwenPaw 网页控制台和小红书热点插件不依赖容器内桌面、Xvfb 或 Chromium。
+# 移除浏览器自动化依赖后，2 GiB ECS 才能稳定完成构建并运行。
+# 以后确实需要浏览器自动化时，再为该能力单独部署一个带浏览器依赖的工作节点。
 # -----------------------------------------------------------------------------
 FROM ${NODE_IMAGE}
 
@@ -27,7 +31,7 @@ ENV QWENPAW_ENABLED_CHANNELS=${QWENPAW_ENABLED_CHANNELS}
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y --fix-missing \
+RUN apt-get update && apt-get install -y --no-install-recommends --fix-missing \
     curl  \
     python3  \
     python3-pip  \
@@ -36,48 +40,9 @@ RUN apt-get update && apt-get install -y --fix-missing \
     libssl-dev  \
     git  \
     supervisor  \
-    vim  \
     gettext-base \
-    xfce4 \
-    xfce4-terminal \
-    xvfb \
-    dbus-x11 \
-    fonts-wqy-zenhei \
-    fonts-wqy-microhei \
   && rm -rf /var/lib/apt/lists/* \
   && apt-get clean
-
-
-RUN apt-get update && apt-get install -y --fix-missing \
-    chromium \
-    chromium-sandbox \
-    libx11-xcb1 \
-    libxcomposite1 \
-    libxdamage1 \
-    libxext6 \
-    libxfixes3 \
-    libxi6 \
-    libxtst6 \
-    libnss3 \
-    libglib2.0-0 \
-    libdrm2 \
-    libgbm1 \
-    libasound2 \
-    fonts-liberation \
-    libu2f-udev \
-  && rm -rf /var/lib/apt/lists/* \
-  && apt-get clean
-
-
-RUN sed -i 's/^CHROMIUM_FLAGS=""/CHROMIUM_FLAGS="--no-sandbox"/' /usr/bin/chromium
-
-# Playwright: use system Chromium (already installed above).
-ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
-# Avoid Playwright downloading its own browser when executable_path is used.
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-# Indicate running in container (used e.g. for Chromium --no-sandbox).
-ENV QWENPAW_RUNNING_IN_CONTAINER=1
-
 WORKDIR ${WORKSPACE_DIR}
 
 RUN python3 -m venv venv
