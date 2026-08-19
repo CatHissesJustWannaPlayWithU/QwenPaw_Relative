@@ -3,16 +3,7 @@ ARG NODE_IMAGE=agentscope-registry.ap-southeast-1.cr.aliyuncs.com/agentscope/nod
 ARG UV_IMAGE=agentscope-registry.ap-southeast-1.cr.aliyuncs.com/agentscope/uv:latest
 
 # -----------------------------------------------------------------------------
-# Stage 1: build console frontend (dist not committed in repo).
-# -----------------------------------------------------------------------------
-FROM ${NODE_IMAGE} AS console-builder
-WORKDIR /app
-# QwenPaw 前端生产构建在 2GiB 服务器上接近 Node 默认堆上限；仅提高构建阶段上限。
-ENV NODE_OPTIONS=--max-old-space-size=1536
-COPY console /app/console
-RUN cd /app/console && npm ci --include=dev && npm run build
-
-# Alias for uv binary so COPY --from can reference a build-arg image.
+# Stage 1: alias the uv binary so COPY --from can reference a build-arg image.
 FROM ${UV_IMAGE} AS uv-src
 
 # -----------------------------------------------------------------------------
@@ -93,10 +84,9 @@ RUN python3 -m venv venv
 ENV PATH="/app/venv/bin:$PATH"
 
 COPY pyproject.toml setup.py README.md ./
+# 已在开发机验证的前端静态文件随 src 一起复制，避免小规格服务器编译 Vite 前端。
 COPY src ./src
 COPY website/public/docs/ ./src/qwenpaw/docs/
-# Inject console dist from build stage (repo does not commit dist).
-COPY --from=console-builder /app/console/dist/ ./src/qwenpaw/console/
 # Speed up Python package installation with uv.
 COPY --from=uv-src /uv /bin/uv
 RUN uv pip install --no-cache-dir . && rm -rf ./build

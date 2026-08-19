@@ -1,0 +1,1 @@
+function p(n,c,f){if(c===f)return n;const e=n.findIndex(r=>r.id===c),d=n.findIndex(r=>r.id===f);if(e===-1||d===-1)return n;const i=n[e],o=n[d],l=i.id==="default"||i.pinned,u=o.id==="default"||o.pinned;if(i.id==="default"||o.id==="default"||!!l!=!!u)return n;const t=[...n],[x]=t.splice(e,1);return t.splice(d,0,x),t}export{p as reorderAgents};

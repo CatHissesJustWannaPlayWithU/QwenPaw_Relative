@@ -30,7 +30,7 @@ pytest.ini
 .eslintrc
 .stylelintrc
 
-# Frontend: exclude build artifacts; ship pre-built src/console/dist in image
+# 前端源码构建产物不进入镜像；已验证的静态文件由 src/qwenpaw/console 提供。
 website
 !website/
 !website/public/
@@ -42,8 +42,6 @@ console/.vite
 node_modules
 **/node_modules
 **/dist
-!src/qwenpaw/console/dist
-!src/qwenpaw/console/dist/**
 **/.vite
 
 # Example and local config (mount at runtime instead)
