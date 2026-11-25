@@ -18,8 +18,9 @@ services:
       QWENPAW_WORKING_DIR: "/app/working"
       QWENPAW_SECRET_DIR: "/app/working.secret"
       QWENPAW_BACKUP_DIR: "/app/working.backups"
-      # This small server only needs the web console channel.
-      QWENPAW_ENABLED_CHANNELS: "console"
+      # Keep the web console plus the optional personal WeChat and DingTalk channels available.
+      # Account binding still requires an administrator to scan and confirm a QR code.
+      QWENPAW_ENABLED_CHANNELS: "console,wechat,dingtalk"
       QWENPAW_CUSTOM_AGENT_STARTUP_CONCURRENCY: "1"
     volumes:
       - /opt/qwenpaw/data/working:/app/working

@@ -67,6 +67,11 @@ def test_auth_middleware_attaches_principal(monkeypatch):
         staticmethod(lambda _request: False),
     )
     monkeypatch.setattr(
+        AuthMiddleware,
+        "_is_unconditionally_public_request",
+        staticmethod(lambda _request: False),
+    )
+    monkeypatch.setattr(
         auth_module,
         "verify_token",
         lambda _token: "alice",
@@ -94,6 +99,49 @@ def test_auth_middleware_attaches_principal(monkeypatch):
         "username": "alice",
         "role": "user",
     }
+
+
+def test_auth_middleware_validates_loopback_bearer_token(monkeypatch):
+    """带 token 的回环请求也必须形成服务器验证后的用户身份。"""
+    import qwenpaw.app.auth as auth_module
+
+    application = FastAPI()
+
+    @application.get("/api/check-principal")
+    async def check_principal(request: Request):
+        principal = get_current_principal(request)
+        return {"user_id": principal.user_id}
+
+    application.add_middleware(AuthMiddleware)
+    monkeypatch.setattr(
+        AuthMiddleware,
+        "_is_unconditionally_public_request",
+        staticmethod(lambda _request: False),
+    )
+    monkeypatch.setattr(
+        AuthMiddleware,
+        "_should_skip_auth",
+        staticmethod(lambda _request: True),
+    )
+    monkeypatch.setattr(auth_module, "verify_token", lambda _token: "alice")
+    monkeypatch.setattr(
+        auth_module,
+        "get_user_by_username",
+        lambda _username: {
+            "id": "user_alice",
+            "username": "alice",
+            "role": "user",
+            "status": "active",
+        },
+    )
+
+    response = TestClient(application).get(
+        "/api/check-principal",
+        headers={"Authorization": "Bearer loopback-token"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"user_id": "user_alice"}
 
 
 def test_auth_middleware_blocks_global_operations_for_regular_users(
@@ -124,6 +172,11 @@ def test_auth_middleware_blocks_global_operations_for_regular_users(
     monkeypatch.setattr(
         AuthMiddleware,
         "_should_skip_auth",
+        staticmethod(lambda _request: False),
+    )
+    monkeypatch.setattr(
+        AuthMiddleware,
+        "_is_unconditionally_public_request",
         staticmethod(lambda _request: False),
     )
     monkeypatch.setattr(auth_module, "verify_token", lambda _token: "alice")

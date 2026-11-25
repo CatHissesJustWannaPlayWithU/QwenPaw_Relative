@@ -113,7 +113,7 @@ cron_fixed_arguments={
 已迁移并启用的任务：
 
 - 智能体：`xhs_hotspot_collector`
-- 任务 ID：`6d759051-c84b-4e72-9f05-91b9f14f410f`
+- 任务 ID：由各自环境创建后生成
 - 时间：每天 09:00，`Asia/Shanghai`
 - 数据源：`uapi_free`
 - 状态：`enabled=true`
@@ -121,7 +121,7 @@ cron_fixed_arguments={
 定时器只能在 QwenPaw 服务运行时触发。因此需要在采集时段保持：
 
 ```bash
-cd /Users/xinyijiang/QwenPaw
+cd /path/to/QwenPaw
 venv/bin/qwenpaw app
 ```
 
@@ -131,10 +131,7 @@ venv/bin/qwenpaw app
 
 - 日志确认：`task_type=tool`、`cron tool`、`status=success`
 - 未出现模型调用或模型限流
-- 生成快照：
-  `/Users/xinyijiang/.qwenpaw/workspaces/xhs_hotspot_collector/hotspot_data/xiaohongshu/2026-08-13/xhs-20260813T100932Z-cbad3b5c.snapshot.json`
-- 原始响应：
-  `/Users/xinyijiang/.qwenpaw/workspaces/xhs_hotspot_collector/hotspot_data/xiaohongshu/2026-08-13/xhs-20260813T100932Z-cbad3b5c.raw.json`
+- 生成快照与原始响应：`~/.qwenpaw/workspaces/xhs_hotspot_collector/hotspot_data/xiaohongshu/`
 - 数据源：`uapi_free`
 - 来源 URL：`https://uapis.cn/api/v1/misc/hotboard?type=xiaohongshu`
 - 条数：10，排名连续为 1 至 10

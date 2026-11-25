@@ -1,0 +1,116 @@
+{
+  "id": "xuzhou-investment-ledger",
+  "name": "徐州招商线索与证据台账",
+  "version": "0.43.2",
+  "type": "tool",
+  "description": "合规发现、采集和追溯徐州招商线索的共享台账；服务端按团队名册授权并逐人审计。工作台明确区分仅发现链接、服务器保存页面材料、服务器重新核验材料与业务人员有权提交的人工授权材料；人工材料保留提交人、时间、访问方式与哈希，绝不伪装成服务器抓取，也不要求提交密码、Cookie 或访问令牌。业务人员还能提交无需账号、Cookie、密钥或付费权限的公开网页入口；服务器先校验网址安全性、robots、公开访问与同域跳转，通过后才按低频范围发现候选，付费或授权 API 必须由开发者在后端按许可接入。机器只保存材料、按规则重新核验、提示风险、记录审计和排序；业务人员最终判断招商价值、交叉核对、负责人及下一步，审批入池不代表企业意愿、签约、落地或自动外联。支持公开来源监控、robots/RSS/Sitemap、可解释来源集中度与自适应队列排序、受团队显式策略约束的固定来源配方重排、人工登记/停用可信来源、地域人工判断、报告、关系图谱和待办。人工材料的实际结果只用于来源阅读优先级学习，不进入机器自动评分、事实分类或风险预警；自动学习不得新增来源、关键词、产业、Skill、证据或对外联系。管理员可管理唯一绑定钉钉内部会话的北京时间09:00新增动态日报（失败仅09:05重试，内容不含链接、网页或联系方式）。QwenPaw 工作台与独立业务页均内置简明使用手册，统一说明功能、状态、人机权限、完整流程和维护扩展点。",
+  "author": "QwenPaw Relative",
+  "entry": {
+    "backend": "xuzhou_investment_ledger.py",
+    "frontend": "frontend/dist/index.js"
+  },
+  "dependencies": [],
+  "qwenpaw_version": {
+    "min": "2.0.0",
+    "max": "2.1.0"
+  },
+  "meta": {
+    "tools": [
+      {
+        "name": "list_xuzhou_investment_leads",
+        "description": "列出当前智能体已保存的招商线索。",
+        "icon": "list"
+      },
+      {
+        "name": "get_xuzhou_investment_lead",
+        "description": "读取单条线索及完整公开证据链。",
+        "icon": "search"
+      },
+      {
+        "name": "get_xuzhou_investment_action_center",
+        "description": "只读汇总红色预警、关系待办、来源对齐和时效复核，供人工轮询；不发送外部推送或自动改变状态。",
+        "icon": "bell-ring"
+      },
+      {
+        "name": "get_xuzhou_outreach_preparation_brief",
+        "description": "只读生成单线索招商准备卡，保留证据 ID；不联系企业、不承诺政策或自动推进。",
+        "icon": "clipboard-check"
+      },
+      {
+        "name": "get_xuzhou_investment_assessment_report",
+        "description": "只读生成单条线索的标准研判报告：证据链、待补证维度、跨来源覆盖及金额口径待人工对齐提示；不作自动招商结论。",
+        "icon": "file-text"
+      },
+      {
+        "name": "get_xuzhou_industry_subdirection_coverage_report",
+        "description": "只读汇总具身智能、半导体、生物医药全部配置细分方向的证据文本与来源覆盖缺口；不自动分类或推进线索。",
+        "icon": "chart-bar"
+      },
+      {
+        "name": "get_xuzhou_investment_work_summary",
+        "description": "只读汇总招商线索、证据、预警、待补证观察及每日工作记录，供人工汇报。",
+        "icon": "chart-bar"
+      },
+      {
+        "name": "get_xuzhou_industry_business_metrics_report",
+        "description": "只读查看人工确认的营业收入、产值和项目投资额时序；三类口径仅并列展示，不相加、不自动确认或推进线索。",
+        "icon": "chart-bar"
+      },
+      {
+        "name": "get_xuzhou_relationship_graph",
+        "description": "只读查看引用既有公开证据的关系图谱，并展示已登记上下游方向、证据覆盖度和待补证提示；可按线索查看一跳子图。",
+        "icon": "share-2"
+      },
+      {
+        "name": "list_xuzhou_relationship_review_queue",
+        "description": "只读列出待人工复核或待补证的关系边，展示固定优先级、原因和证据引用；不自动改变业务状态。",
+        "icon": "list-check"
+      },
+      {
+        "name": "list_xuzhou_relationship_drafts",
+        "description": "只读列出从已签名公开证据确定性抽取的法人、创始人、实控人、股东、董事和高管关系草稿及人工判断；不自动建图或推进线索。",
+        "icon": "users-round"
+      },
+      {
+        "name": "list_xuzhou_candidate_observations",
+        "description": "只读列出待补证候选快照的来源、哈希、固定词表命中和人工优先级，不触发网页访问。",
+        "icon": "list-search"
+      },
+      {
+        "name": "get_xuzhou_candidate_observation",
+        "description": "只读校验并查看一条候选原始快照的可见正文与待补证信号；不重抓页面、不写证据或推进线索。",
+        "icon": "file-search"
+      },
+      {
+        "name": "discover_xuzhou_public_sources",
+        "description": "按预设产业和信号目录发现免费公开候选链接；搜索摘要不会直接成为事实证据。",
+        "icon": "compass"
+      },
+      {
+        "name": "capture_xuzhou_discovery_candidate",
+        "description": "对已发现候选执行页面核验并追加可追溯证据；可信目录匹配时才采用其来源等级。",
+        "icon": "download"
+      },
+      {
+        "name": "inspect_xuzhou_discovery_candidate",
+        "description": "读取候选页面的受限正文快照，不写证据或改变线索状态。",
+        "icon": "file-search"
+      },
+      {
+        "name": "run_xuzhou_source_monitor",
+        "description": "仅供固定 Cron 参数调用：执行三条产业线搜索、可信目录 robots/RSS/Sitemap 发现及少量候选原始快照待补证提示；不把词表命中写成事实或自动推进线索。",
+        "icon": "timer"
+      },
+      {
+        "name": "run_xuzhou_outcome_learning_cycle",
+        "description": "仅供固定 Cron 参数调用：根据当前规则版本的充分最终结果反馈，至多创建一版单维度等额平衡的新评分规则，并可追加来源配方待审批建议；不改原始证据、线索、人工复核或 Skill。",
+        "icon": "brain-circuit"
+      },
+      {
+        "name": "get_xuzhou_source_coverage_report",
+        "description": "只读查看产业与信号目录的覆盖缺口、抓取失败、访问退避及候选—观察—正式证据关联的来源有效性反馈；不自动调配方或权重。",
+        "icon": "chart-bar"
+      }
+    ]
+  }
+}

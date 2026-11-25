@@ -101,21 +101,29 @@ def _extract_placeholder_name(content_parts: list) -> tuple[str, str]:
     return first_text[:10], first_text
 
 
-def _extract_session_and_payload(request_data: Union[AgentRequest, dict]):
-    """Extract run_key (ChatSpec.id), session_id, and native payload.
+def _extract_session_and_payload(
+    request_data: Union[AgentRequest, dict],
+    *,
+    authenticated_user_id: str | None = None,
+):
+    """构造 Console 运行载荷，并在已认证时强制使用服务器确认的用户身份。
 
-    run_key must be ChatSpec.id (chat_id) so it matches list_chats/get_chat.
+    输入是浏览器提交的聊天内容及可选的认证用户 ID；输出为 Console 通道的固定载荷。
+    认证用户 ID 只能由路由从 ``request.state.principal`` 传入，永远优先于请求体中的
+    ``user_id``，因此客户端不能冒充他人，也不会因未传 ``user_id`` 而错误地回退为
+    ``default`` 智能体 ID。未启用认证的兼容部署才保留原有请求体/``default`` 回退行为。
+    本函数不读取账号目录、不授权台账访问，也不写入聊天、证据或业务数据。
     """
     if isinstance(request_data, AgentRequest):
         channel_id = getattr(request_data, "channel", None) or "console"
-        sender_id = request_data.user_id or "default"
+        sender_id = authenticated_user_id or request_data.user_id or "default"
         session_id = request_data.session_id or "default"
         content_parts = (
             list(request_data.input[0].content) if request_data.input else []
         )
     else:
         channel_id = request_data.get("channel", "console")
-        sender_id = request_data.get("user_id", "default")
+        sender_id = authenticated_user_id or request_data.get("user_id", "default")
         session_id = request_data.get("session_id", "default")
         input_data = request_data.get("input", [])
         content_parts = []
@@ -150,6 +158,26 @@ def _extract_session_and_payload(request_data: Union[AgentRequest, dict]):
         "meta": meta,
     }
     return native_payload
+
+
+def _authenticated_console_user_id(request: Request) -> str | None:
+    """从认证中间件取得 Console 工具运行身份，不接受浏览器声明的用户 ID。
+
+    输入是当前 HTTP 请求；认证关闭时输出 ``None``，以兼容单机旧部署。认证开启时，
+    输出必须是中间件验证后的非空 ``principal.user_id``，格式异常则返回 401，而不是
+    退回到请求体、会话 ID 或智能体 ID。这样共享台账工具收到的只能是服务器确认的
+    登录用户身份；本函数不查询或修改用户、名册、台账和聊天数据。
+    """
+    principal = getattr(request.state, "principal", None)
+    if principal is None:
+        return None
+    user_id = getattr(principal, "user_id", None)
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication context is invalid",
+        )
+    return user_id
 
 
 def _tail_text_file(
@@ -201,7 +229,10 @@ async def post_console_chat(
             detail="Channel Console not found",
         )
     try:
-        native_payload = _extract_session_and_payload(request_data)
+        native_payload = _extract_session_and_payload(
+            request_data,
+            authenticated_user_id=_authenticated_console_user_id(request),
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     session_id = console_channel.resolve_session_id(
@@ -567,7 +598,10 @@ async def post_console_chat_task(
         )
 
     task_id = f"task-{uuid.uuid4().hex[:12]}"
-    native_payload = _extract_session_and_payload(request_data)
+    native_payload = _extract_session_and_payload(
+        request_data,
+        authenticated_user_id=_authenticated_console_user_id(request),
+    )
     session_id = console_channel.resolve_session_id(
         sender_id=native_payload["sender_id"],
         channel_meta=native_payload["meta"],

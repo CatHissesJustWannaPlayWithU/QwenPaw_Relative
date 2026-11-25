@@ -151,6 +151,120 @@ async def test_tool_job_runs_only_an_enabled_cron_safe_tool(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_cron_only_delivery_tool_sends_its_explicit_text_and_records_result(tmp_path):
+    recorded = []
+
+    async def deliver():
+        return {
+            "ok": True,
+            "cron_delivery": {"text": "日报计数和标题"},
+        }
+
+    async def record_delivery(*, result, status, error):
+        recorded.append((result, status, error))
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolDescriptor(
+            name="daily-digest",
+            func=deliver,
+            metadata={
+                "cron_safe": True,
+                "cron_only": True,
+                "cron_deliver_result": True,
+                "cron_delivery_result_handler": record_delivery,
+            },
+        ),
+    )
+    workspace = SimpleNamespace(
+        agent_id="xuzhou",
+        workspace_dir=tmp_path,
+        plugins=SimpleNamespace(tool_registry=registry),
+        # Cron-only tools intentionally have no ordinary agent tool config.
+        config=SimpleNamespace(tools=SimpleNamespace(builtin_tools={})),
+    )
+    job = CronJobSpec.model_validate(
+        {
+            "name": "Daily digest",
+            "schedule": ScheduleSpec(type="cron", cron="0 9 * * *"),
+            "task_type": "tool",
+            "tool": {"name": "daily-digest", "arguments": {}},
+            "dispatch": {
+                "channel": "dingtalk",
+                "target": {"user_id": "owner", "session_id": "bound-session"},
+                "silent": False,
+            },
+        },
+    )
+    channel_manager = AsyncMock()
+
+    result = await CronExecutor(workspace=workspace, channel_manager=channel_manager).execute(job)
+
+    assert result["delivery_status"] == "success"
+    channel_manager.send_text.assert_awaited_once()
+    assert channel_manager.send_text.await_args.kwargs["text"] == "日报计数和标题"
+    assert recorded == [
+        (
+            {"ok": True, "cron_delivery": {"text": "日报计数和标题"}},
+            "sent",
+            None,
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cron_delivery_tool_records_failure_and_surfaces_job_error(tmp_path):
+    recorded = []
+
+    async def deliver():
+        return {"cron_delivery": {"text": "日报"}}
+
+    async def record_delivery(*, result, status, error):
+        recorded.append((result, status, error))
+
+    registry = ToolRegistry()
+    registry.register(
+        ToolDescriptor(
+            name="daily-digest",
+            func=deliver,
+            metadata={
+                "cron_safe": True,
+                "cron_only": True,
+                "cron_deliver_result": True,
+                "cron_delivery_result_handler": record_delivery,
+            },
+        ),
+    )
+    workspace = SimpleNamespace(
+        agent_id="xuzhou",
+        workspace_dir=tmp_path,
+        plugins=SimpleNamespace(tool_registry=registry),
+        config=SimpleNamespace(tools=SimpleNamespace(builtin_tools={})),
+    )
+    job = CronJobSpec.model_validate(
+        {
+            "name": "Daily digest",
+            "schedule": ScheduleSpec(type="cron", cron="0 9 * * *"),
+            "task_type": "tool",
+            "tool": {"name": "daily-digest", "arguments": {}},
+            "dispatch": {
+                "channel": "dingtalk",
+                "target": {"user_id": "owner", "session_id": "bound-session"},
+                "silent": False,
+            },
+        },
+    )
+    channel_manager = AsyncMock()
+    channel_manager.send_text.side_effect = RuntimeError("delivery down")
+
+    with pytest.raises(RuntimeError, match="delivery failed"):
+        await CronExecutor(workspace=workspace, channel_manager=channel_manager).execute(job)
+
+    assert recorded[0][1] == "failed"
+    assert "delivery down" in (recorded[0][2] or "")
+
+
+@pytest.mark.asyncio
 async def test_tool_job_rejects_a_tool_without_cron_safe_marker(tmp_path):
     registry = ToolRegistry()
     registry.register(ToolDescriptor(name="unsafe", func=lambda: {"ok": True}))

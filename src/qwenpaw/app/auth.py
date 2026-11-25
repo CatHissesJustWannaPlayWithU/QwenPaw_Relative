@@ -1035,10 +1035,20 @@ class AuthMiddleware(BaseHTTPMiddleware):
     """为受保护路由检查 Bearer token 的中间件。"""
 
     async def dispatch(self, request: Request, call_next):
-        if self._should_skip_auth(request):
+        # 输入：当前 HTTP 请求及其可能携带的 Bearer token；输出：继续请求或
+        # 返回 401/403。公开接口、认证未启用和无用户时不应读取 token，否则会
+        # 让登录接口被浏览器残留的过期 token 意外阻断。
+        if self._is_unconditionally_public_request(request):
             return await call_next(request)
 
         token = self._extract_token(request)
+        # 回环地址可在“没有 token”时保留原有免认证能力，方便本机初始化和
+        # 运维探针；但只要调用方明确提交 token，就必须验证并写入 principal。
+        # 否则受保护的插件会拿不到服务器确认的操作者身份，只能安全地拒绝
+        # 业务写入。该分支从不信任前端或模型传来的 user_id。
+        if self._should_skip_auth(request) and not token:
+            return await call_next(request)
+
         if not token:
             return Response(
                 content='{"detail":"Not authenticated"}',
@@ -1095,14 +1105,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
     @staticmethod
-    def _should_skip_auth(  # pylint: disable=too-many-return-statements
-        request: Request,
-    ) -> bool:
+    def _is_unconditionally_public_request(request: Request) -> bool:
+        """判断请求是否天然无需认证，不受来源 IP 或 token 是否存在影响。
+
+        输入为 HTTP 请求，输出为布尔值。认证关闭、尚未创建账号、CORS 预检和
+        明确公开的登录/静态路由均返回 True；它们不会建立用户 principal。将
+        这个判断与回环免认证分开，可保证本机自动化脚本提交 token 时仍由服务
+        器验证真实操作者身份，而不是接受任何客户端伪造的身份字段。
+        """
         if not is_auth_enabled() or not has_registered_users():
             return True
 
         path = request.url.path
-        if (
+        return bool(
             request.method == "OPTIONS"
             or request.method in _PUBLIC_METHODS_BY_PATH.get(
                 path,
@@ -1110,7 +1125,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
             )
             or any(path.startswith(p) for p in _PUBLIC_PREFIXES)
             or not path.startswith("/api/")
-        ):
+        )
+
+    @staticmethod
+    def _should_skip_auth(  # pylint: disable=too-many-return-statements
+        request: Request,
+    ) -> bool:
+        if AuthMiddleware._is_unconditionally_public_request(request):
             return True
 
         cfg, _ = _get_config_cached()

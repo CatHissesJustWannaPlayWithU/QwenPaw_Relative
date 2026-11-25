@@ -309,7 +309,10 @@ class CronExecutor:
             {},
         )
         tool_config = builtin_tools.get(tool_name)
-        if tool_config is None or not getattr(tool_config, "enabled", False):
+        if (
+            not descriptor.metadata.get("cron_only", False)
+            and (tool_config is None or not getattr(tool_config, "enabled", False))
+        ):
             raise ValueError(
                 f"Cron tool '{tool_name}' is not enabled for this agent",
             )
@@ -336,6 +339,100 @@ class CronExecutor:
             )
         if isinstance(result, dict) and result.get("ok") is False:
             raise RuntimeError(str(result.get("error") or "Cron tool failed"))
+
+        # Cron tools are silent by default.  A plugin must explicitly opt in
+        # before a returned value can become a channel message, which prevents
+        # an arbitrary tool result, error, URL, or internal object from being
+        # delivered to a user merely because it was scheduled.
+        if descriptor.metadata.get("cron_deliver_result", False) and not job.dispatch.silent:
+            if not isinstance(result, dict):
+                raise RuntimeError(
+                    f"Cron delivery tool '{tool_name}' must return an object",
+                )
+            delivery = result.get("cron_delivery")
+            if delivery is None:
+                return {
+                    "task_type": "tool",
+                    "tool_name": tool_name,
+                    "delivery_status": "suppressed",
+                    "delivery_error": None,
+                }
+            if not isinstance(delivery, dict) or not isinstance(
+                delivery.get("text"), str
+            ):
+                raise RuntimeError(
+                    f"Cron delivery tool '{tool_name}' returned invalid delivery text",
+                )
+            delivery_text = delivery["text"].strip()
+            if not delivery_text:
+                return {
+                    "task_type": "tool",
+                    "tool_name": tool_name,
+                    "delivery_status": "suppressed",
+                    "delivery_error": None,
+                }
+
+            delivery_handler = descriptor.metadata.get(
+                "cron_delivery_result_handler",
+            )
+
+            async def _record_delivery(
+                delivery_status: str,
+                delivery_error: str | None,
+            ) -> None:
+                if not callable(delivery_handler):
+                    return
+                try:
+                    handler_result = delivery_handler(
+                        result=result,
+                        status=delivery_status,
+                        error=delivery_error,
+                    )
+                    if inspect.isawaitable(handler_result):
+                        await handler_result
+                except Exception:  # pylint: disable=broad-except
+                    # The channel delivery result is authoritative.  Do not
+                    # turn a post-delivery audit failure into a retry that may
+                    # duplicate a message; leave diagnostic evidence in logs.
+                    logger.exception(
+                        "cron delivery audit callback failed: job_id=%s tool=%s",
+                        job.id,
+                        tool_name,
+                    )
+
+            try:
+                await self._channel_manager.send_text(
+                    channel=job.dispatch.channel,
+                    user_id=job.dispatch.target.user_id,
+                    session_id=job.dispatch.target.session_id,
+                    text=delivery_text,
+                    meta={
+                        **dict(job.dispatch.meta or {}),
+                        "source": "cron_tool_delivery",
+                        "cron_job_id": job.id or "",
+                        "tool_name": tool_name,
+                    },
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                delivery_error = repr(exc)
+                await _record_delivery("failed", delivery_error)
+                logger.warning(
+                    "cron tool delivery failed: job_id=%s channel=%s error=%s",
+                    job.id,
+                    job.dispatch.channel,
+                    delivery_error,
+                )
+                raise RuntimeError(
+                    f"Cron tool '{tool_name}' delivery failed: {delivery_error}",
+                ) from exc
+
+            await _record_delivery("sent", None)
+            return {
+                "task_type": "tool",
+                "tool_name": tool_name,
+                "delivery_status": "success",
+                "delivery_error": None,
+            }
 
         return {
             "task_type": "tool",

@@ -56,6 +56,16 @@ providers.json
 envs.json
 !.env.example
 !.env.template
+# Local credentials and operational records are not portfolio source files.
+*.pem
+*.key
+*.p12
+*.pfx
+*.sqlite
+*.sqlite3
+credentials.yaml
+credentials.yml
+.qwenpaw/
 __pycache__/
 *.db
 *.rdb

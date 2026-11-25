@@ -1,3 +1,23 @@
+# QwenPaw Relative — AI Agent Applications
+
+**Portfolio project by Xinyi Jiang (蒋心逸)** · [中文项目说明](docs/PORTFOLIO_zh.md) · [English project guide](docs/PORTFOLIO_en.md)
+
+This repository extends the open-source [QwenPaw](https://github.com/agentscope-ai/QwenPaw) platform. It brings together a data-cleaning prototype, multi-user access control, a Xiaohongshu trend workflow, and a Xuzhou investment research workbench with a separate business-facing portal. The work was carried out with AI coding assistance; the contribution guide explains the division of responsibilities and links to the implementation.
+
+| Foundation supplied by QwenPaw | Work in this project |
+| --- | --- |
+| Agent runtime, model integration, chat, plugin/Skill system, developer console, scheduling and channel infrastructure | CSV cleaning; authentication and user-resource isolation extensions; Xiaohongshu collection and reports; Xuzhou evidence ledger, human review, business portal and a scoped DingTalk digest |
+
+**Start here:** [Contribution and architecture guide](docs/PORTFOLIO_en.md) · [Xuzhou workbench](plugins/tool/xuzhou-investment-ledger/) · [Business portal](xuzhou-business-portal/) · [Xiaohongshu plugin](plugins/tool/xhs-hotspot/) · [Changes since the upstream baseline](https://github.com/CatHissesJustWannaPlayWithU/QwenPaw_Relative/compare/f433bbff...main)
+
+This is a source-code showcase, not a hosted demo. Credentials, operational records and production data are excluded. Public-page availability and messaging depend on the user's own configuration. Human review remains essential: a candidate or an evidence record is not an investment commitment or a successful project landing.
+
+---
+
+## Original QwenPaw documentation
+
+The following upstream documentation and the repository's [Apache 2.0 license](LICENSE) are retained for attribution and reference.
+
 <div align="center">
 
 # QwenPaw

@@ -6,11 +6,11 @@
   <string>ai.qwenpaw.xhs-hotspot-collector</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/xinyijiang/QwenPaw/venv/bin/qwenpaw</string>
+    <string>__PROJECT_DIR__/venv/bin/qwenpaw</string>
     <string>app</string>
   </array>
   <key>WorkingDirectory</key>
-  <string>/Users/xinyijiang/QwenPaw</string>
+  <string>__PROJECT_DIR__</string>
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
@@ -20,15 +20,15 @@
   <key>ProcessType</key>
   <string>Background</string>
   <key>StandardOutPath</key>
-  <string>/Users/xinyijiang/.qwenpaw/logs/launchd-qwenpaw.out.log</string>
+  <string>__USER_HOME__/.qwenpaw/logs/launchd-qwenpaw.out.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/xinyijiang/.qwenpaw/logs/launchd-qwenpaw.err.log</string>
+  <string>__USER_HOME__/.qwenpaw/logs/launchd-qwenpaw.err.log</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key>
-    <string>/Users/xinyijiang</string>
+    <string>__USER_HOME__</string>
     <key>PATH</key>
-    <string>/Users/xinyijiang/QwenPaw/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <string>__PROJECT_DIR__/venv/bin:/usr/local/bin:/usr/bin:/bin</string>
   </dict>
 </dict>
 </plist>

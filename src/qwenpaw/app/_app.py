@@ -836,6 +836,7 @@ if CORS_ORIGINS:
 
 
 _CONSOLE_STATIC_ENV = "QWENPAW_CONSOLE_STATIC_DIR"
+_BUSINESS_PORTAL_STATIC_ENV = "QWENPAW_BUSINESS_PORTAL_STATIC_DIR"
 
 
 def _resolve_console_static_dir() -> str:
@@ -870,11 +871,38 @@ def _resolve_console_static_dir() -> str:
     return str(fallback)
 
 
+def _resolve_business_portal_static_dir() -> str:
+    """Resolve the optional, standalone Xuzhou business portal static directory.
+
+    The portal is deliberately served under the business route on the same
+    origin as QwenPaw. It is a separate, business-oriented frontend, but its
+    requests still use existing authenticated API endpoints; keeping the
+    origin identical avoids a second CORS/authentication surface and does not
+    add any API routes or duplicate user data.
+    """
+    from ..constant import EnvVarLoader
+
+    static_dir = EnvVarLoader.get_str(_BUSINESS_PORTAL_STATIC_ENV)
+    if static_dir:
+        return static_dir
+
+    # Development fallback: the portal lives beside deploy/ and src/ in a
+    # source checkout. Installed packages only expose it when explicitly
+    # configured by the production image.
+    pkg_dir = Path(__file__).resolve().parent.parent
+    repo_dir = pkg_dir.parent.parent
+    candidate = repo_dir / "xuzhou-business-portal"
+    return str(candidate) if (candidate / "index.html").is_file() else ""
+
+
 _CONSOLE_STATIC_DIR = _resolve_console_static_dir()
 _CONSOLE_INDEX = (
     Path(_CONSOLE_STATIC_DIR) / "index.html" if _CONSOLE_STATIC_DIR else None
 )
+_BUSINESS_PORTAL_STATIC_DIR = _resolve_business_portal_static_dir()
 logger.info(f"STATIC_DIR: {_CONSOLE_STATIC_DIR}")
+if _BUSINESS_PORTAL_STATIC_DIR:
+    logger.info("BUSINESS_PORTAL_STATIC_DIR: %s", _BUSINESS_PORTAL_STATIC_DIR)
 
 # The SPA entry (index.html) must never be cached: it references content-hashed
 # JS/CSS bundles, so a stale cached index.html would keep pointing the WebView
@@ -948,6 +976,16 @@ app.include_router(voice_router, tags=["voice"])
 
 # Console static files and SPA fallback
 # Register these AFTER API routes to ensure proper routing priority
+if os.path.isdir(_BUSINESS_PORTAL_STATIC_DIR):
+    # html=True resolves /business/ to its own index.html. It must be mounted
+    # before the console catch-all below, otherwise the developer console SPA
+    # would absorb the business portal URL.
+    app.mount(
+        "/business",
+        StaticFiles(directory=str(_BUSINESS_PORTAL_STATIC_DIR), html=True),
+        name="xuzhou_business_portal",
+    )
+
 if os.path.isdir(_CONSOLE_STATIC_DIR):
     _console_path = Path(_CONSOLE_STATIC_DIR)
 

@@ -17,7 +17,7 @@
 邮件工具不会接收、保存或回显 SMTP 密码。先在本机终端运行以下命令，脚本会隐藏输入的 SMTP 密码或授权码，并加密写入专用智能体的 `credentials.yaml`：
 
 ```zsh
-cd /Users/xinyijiang/QwenPaw
+cd /path/to/QwenPaw
 venv/bin/python scripts/configure_xhs_report_smtp.py \
   --host smtp.qq.com \
   --port 465 \
@@ -36,7 +36,7 @@ venv/bin/python scripts/configure_xhs_report_smtp.py \
 每日 Cron 必须在 QwenPaw 进程运行时才能触发。macOS 可以安装项目内的 LaunchAgent：
 
 ```zsh
-cd /Users/xinyijiang/QwenPaw
+cd /path/to/QwenPaw
 zsh scripts/install_xhs_hotspot_launchd.sh
 ```
 

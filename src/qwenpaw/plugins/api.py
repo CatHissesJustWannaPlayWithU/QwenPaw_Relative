@@ -60,6 +60,9 @@ def _bridge_to_runtime(
     *,
     cron_safe: bool = False,
     cron_fixed_arguments: Dict[str, Any] | None = None,
+    cron_only: bool = False,
+    cron_deliver_result: bool = False,
+    cron_delivery_result_handler: Callable[..., Any] | None = None,
 ) -> None:
     """Attach ToolDescriptor and inject into runtime ToolRegistries."""
     import inspect
@@ -78,6 +81,14 @@ def _bridge_to_runtime(
             metadata={
                 "cron_safe": cron_safe,
                 "cron_fixed_arguments": dict(cron_fixed_arguments or {}),
+                "cron_only": cron_only,
+                # A Cron tool normally runs silently.  This opt-in is only
+                # for tightly scoped tools whose returned text is safe to
+                # deliver verbatim to the job's already-bound channel target.
+                "cron_deliver_result": cron_deliver_result,
+                # This is an in-process callable supplied by trusted plugin
+                # code, never a client-provided callback or serialized value.
+                "cron_delivery_result_handler": cron_delivery_result_handler,
             },
         )
         # pylint: disable-next=protected-access
@@ -627,6 +638,9 @@ class PluginApi:  # pylint: disable=too-many-public-methods
         enabled: bool = False,
         cron_safe: bool = False,
         cron_fixed_arguments: Optional[Dict[str, Any]] = None,
+        cron_only: bool = False,
+        cron_deliver_result: bool = False,
+        cron_delivery_result_handler: Optional[Callable[..., Any]] = None,
     ) -> None:
         """Register a tool function into the Agent's toolkit.
 
@@ -656,6 +670,14 @@ class PluginApi:  # pylint: disable=too-many-public-methods
                 fixed tool without a model decision. Default: False.
             cron_fixed_arguments: Exact arguments required when the tool is
                 started by Cron. ``None`` allows any function-valid args.
+            cron_only: Keep the tool out of ordinary agent configuration and
+                allow it only through a Cron-safe, fixed-argument task.
+            cron_deliver_result: Whether a Cron ``tool`` task may deliver the
+                tool's explicit ``cron_delivery.text`` result verbatim to its
+                fixed dispatch target.  Default: False.
+            cron_delivery_result_handler: Trusted in-process callback used to
+                record the result of that delivery.  It is never exposed to
+                clients or persisted in Cron job data.
 
         Example:
             >>> from .tool import my_tool_func
@@ -688,13 +710,17 @@ class PluginApi:  # pylint: disable=too-many-public-methods
                     self._registry,
                     cron_safe=cron_safe,
                     cron_fixed_arguments=cron_fixed_arguments,
+                    cron_only=cron_only,
+                    cron_deliver_result=cron_deliver_result,
+                    cron_delivery_result_handler=cron_delivery_result_handler,
                 )
-                _write_tool_config(
-                    tool_name,
-                    enabled,
-                    description,
-                    icon,
-                )
+                if not cron_only:
+                    _write_tool_config(
+                        tool_name,
+                        enabled,
+                        description,
+                        icon,
+                    )
 
             except Exception as exc:
                 logger.error(

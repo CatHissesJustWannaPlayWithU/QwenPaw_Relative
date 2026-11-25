@@ -47,6 +47,7 @@ ENV PATH="/app/venv/bin:$PATH"
 COPY pyproject.toml setup.py README.md ./
 # 已在开发机验证的前端静态文件随 src 一起复制，避免小规格服务器编译 Vite 前端。
 COPY src ./src
+COPY xuzhou-business-portal ./business-portal
 COPY website/public/docs/ ./src/qwenpaw/docs/
 # Speed up Python package installation with uv.
 COPY --from=uv-src /uv /bin/uv
@@ -55,6 +56,7 @@ RUN uv pip install --no-cache-dir . && rm -rf ./build
 
 # QwenPaw app port (default 8088). Override at runtime with -e QWENPAW_PORT=3000.
 ENV QWENPAW_PORT=8088
+ENV QWENPAW_BUSINESS_PORTAL_STATIC_DIR=/app/business-portal
 
 COPY deploy/config/supervisord.conf.template /etc/supervisor/conf.d/supervisord.conf.template
 COPY --chmod=755 deploy/entrypoint.sh /entrypoint.sh
